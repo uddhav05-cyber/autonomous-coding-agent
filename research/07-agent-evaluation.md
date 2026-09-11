@@ -1,0 +1,351 @@
+# Agent Evaluation
+
+## Task Completion
+
+Evaluating whether agents successfully accomplish their assigned objectives:
+
+### Completion Criteria
+- **Objective Achievement**: All stated goals of the task have been met
+- **Requirement Satisfaction**: Functional and non-functional requirements fulfilled
+- **Acceptance Criteria**: Specific conditions for task acceptance are satisfied
+- **User Satisfaction**: Human evaluator judges the outcome as satisfactory
+- **Comparative Benchmark**: Performance meets or exceeds baseline expectations
+- **Boundary Compliance**: Task stayed within defined scope and constraints
+- **Resource Efficiency**: Completed within allocated time, token, and compute budgets
+- **Quality Thresholds**: Output meets minimum standards for correctness, clarity, etc.
+- **Side Effect Absence**: No unintended or harmful consequences resulted
+- **Reproducibility**: Same task yields similar results when repeated
+- **Generalizability**: Solution works for similar variations of the task
+- **Maintainability**: Resulting code is easy to understand and modify
+- **Documentation Adequacy**: Sufficient explanatory materials accompany solution
+- **Testability**: Outcome facilitates future testing and validation
+- **Integration Compatibility**: Works correctly with existing systems and code
+- **Future-proofing**: Solution remains viable as requirements evolve
+
+### Measurement Approaches
+- **Binary Success/Fail**: Simple determination of whether task was completed
+- **Percentage Completion**: Partial credit for multi-stage or modular tasks
+- **Weighted Criteria**: Different objectives contribute differently to completion score
+- **Threshold-based**: Minimum performance on key metrics required for success
+- **Holistic Judgment**: Expert evaluation considering multiple factors
+- **Comparative Scoring**: Performance ranked against alternatives or baselines
+- **Deficit Analysis**: Identification and quantification of falling-short areas
+- **Exceedance Measurement**: Degree to which expectations were surpassed
+- **Consistency Metrics**: Similar performance across multiple attempts
+- **Improvement Tracking**: Progress shown over multiple iterations
+- **Peer Comparison**: Performance relative to other agents or humans
+- **Long-term Tracking**: Evaluation of solution viability over time
+- **Cost-benefit Analysis**: Value gained versus resources expended
+- **Opportunity Cost**: What else could have been done with same resources
+- **Learning Extraction**: Insights gained that improve future performance
+- **Failure Diagnosis**: Root cause analysis when tasks are not completed
+- **Process Adherence**: Following prescribed methodologies and procedures
+- **Innovation Credit**: Recognition for novel or creative approaches
+- **Elegance Measurement**: Simplicity and effectiveness of solution
+- **Scalability Assessment**: Viability of approach at different scales
+- **Robustness Check**: Performance under variations and edge cases
+- **Security Verification**: absence of vulnerabilities or weaknesses
+- **Compliance Checking**: Adherence to relevant standards and regulations
+- **Accessibility**: Usability by people with diverse abilities
+- **Internationalization**: Functionality across different locales and languages
+- **Environmental Impact**: Resource consumption and sustainability factors
+- **Ethical Considerations**: Alignment with moral principles and values
+- **Legal Compliance**: Adherence to applicable laws and regulations
+- **Stakeholder Satisfaction**: Happiness of all parties affected by outcome
+- **Maintainability Projection**: Estimated effort required for future upkeep
+- **Technical Debt Assessment**: Long-term costs incurred by shortcuts taken
+- **Knowledge Transfer**: Degree to which solution enables team learning
+- **Process Improvement**: Enhancements to development approaches demonstrated
+- **Tool Chain Validation**: Effective use of development tools and environments
+- **Metrics Instrumentation**: Quality of performance measurement itself
+- **Reproducibility Score**: Consistency of results under identical conditions
+- **Generalizability Breadth**: Range of similar tasks the solution handles
+- **Adaptability Measure**: Ease of modification for changing requirements
+- **Integration Effort**: Work required to combine with other systems
+- **Deployment Readiness**: Preparedness for moving to production environments
+- **Monitoring Capability**: Ability to observe solution in operation
+- **Alerting Appropriateness**: Correct notifications when problems arise
+- **Recovery Facility**: Capacity to return to normal state after disturbances
+- **Graceful Degradation**: Continued partial operation when components fail
+- **Fault Tolerance**: Continued correct operation despite component failures
+- **Self-healing Ability**: Automatic recovery from certain types of failures
+- **Monitoring Overhead**: Resources consumed by observation mechanisms
+- **Observability**: Ability to understand internal state from external signals
+- **Controllability**: Ability to influence behavior through external inputs
+- **Identifiability**: Ability to determine what went wrong and why
+- **Separability**: Capacity to isolate and test components independently
+- **Replaceability**: Ability to swap out components without systemic effects
+- **Composability**: Facility to combine with other systems to create new capabilities
+- **Extensibility**: Ease of adding new capabilities or modifying existing ones
+- **Customizability**: Ability to tailor to specific needs or preferences
+- **Configuration Simplicity**: Ease of adjusting behavior through settings
+- **Documentation Quality**: Clarity, completeness, and accuracy of explanatory materials
+- **Example Sufficiency**: Adequacy of illustrative materials for understanding
+- **Tutorial Effectiveness**: Success in teaching others to use or modify
+- **Reference Value**: Utility as lookup resource for specific information
+- **Community Adoption**: Acceptance and use by others beyond original team
+- **Ecosystem Compatibility**: Work well with related tools and technologies
+- **Standards Alignment**: Conformity to relevant industry or de facto standards
+- **Vendor Lock-in Risk**: Difficulty of switching to alternative solutions
+- **Migration Path**: Clarity of route to different implementations or platforms
+- **Support Longevity**: Duration of available assistance and updates
+- **Update Frequency**: Regularity of improvements and bug fixes
+- **Backward Compatibility**: Continued work with previous versions or data
+- **Forward Compatibility**: Design facilitates future enhancements
+- **Version Clarity**: Clear identification of what version is being evaluated
+- **Release Stability**: Absence of major problems in released versions
+- **Patch Frequency**: Regularity of minor updates and fixes
+- **Major Update Cadence**: Timing of significant feature additions
+- **Deprecation Policy**: Clear communication of planned removals
+- **Migration Assistance**: Help provided when moving to newer versions
+- **Long-term Support**: Commitment to maintaining older versions
+- **End-of-life Planning**: Preparation for eventual discontinuation
+- **Community Forking**: Viability of community-maintained alternatives
+- **Academic Usage**: Adoption in educational settings and research
+- **C Pyramide**: Clear progression from basic to advanced usage
+- **Skill Transfer**: Applicability of learned abilities to other domains
+- **Psychological Safety**: Feeling safe to experiment and make mistakes
+- **Learning Curve**: Time and effort required to become proficient
+- **Mastery Potential**: Ceiling of achievable skill level
+- **Productivity Gain**: Increase in output per unit time after adoption
+- **Error Reduction**: Decrease in mistakes following implementation
+- **Speed Improvement**: Reduction in time required to complete tasks
+- **Quality Enhancement**: Improvement in output characteristics
+- **Reliability Increase**: Greater consistency and dependability
+- **Maintainability Reduction**: Less effort required to keep working
+- **Collaboration Enhancement**: Better teamwork and coordination
+- **Communication Improvement**: Clearer exchange of information
+- **Knowledge Sharing**: Facilitated transfer of understanding between people
+- **Morale Boost**: Increased enthusiasm and engagement
+- **Retention Improvement**: Reduced turnover in teams using the approach
+- **Recruitment Enhancement**: Easier hiring due to technology reputation
+- **Innovation Stimulation**: Encouragement of experimentation and novelty
+- **Problem Solving Improvement**: Better ability to tackle difficult challenges
+- **Decision Making Enhancement**: Higher quality choices and judgments
+- **Strategic Thinking Improvement**: Better long-term planning and foresight
+- **Leadership Development**: Growth of guiding and directing abilities
+- **Conflict Resolution**: Better handling of disagreements and tensions
+- **Change Adaptation**: Improved response to new situations and requirements
+- **Resilience Building**: Increased ability to bounce back from setbacks
+- **Stress Reduction**: Lower experience of pressure and strain
+- **Work-life Balance Improvement**: Better division between professional and personal life
+- **Job Satisfaction Increase**: Greater fulfillment from work activities
+- **Career Advancement**: Enhanced opportunities for professional growth
+- **Salary Impact**: Positive correlation with earning potential
+- **Professional Recognition**: Acknowledgment by peers and experts
+- **Thought Leadership**: Influence on direction of field or discipline
+- **Mentoring Capability**: Ability to guide others' development
+- **Teaching Effectiveness**: Success in conveying knowledge to students
+- **Research Facilitation**: Assistance in conducting scholarly investigations
+- **Publication Support**: Help in preparing academic articles and papers
+- **Grant Acquisition**: Improved success in obtaining funding
+- **Service Quality**: Level of assistance provided to users or customers
+- **Response Timeliness**: Speed of reply to inquiries or problems
+- **Issue Resolution**: Effectiveness in addressing user concerns
+- **Escalation Handling**: Proper management of complex or serious problems
+- **Self-service Capability**: Ability for users to help themselves
+- **Documentation Clarity**: Ease of understanding provided instructions
+- **Example Relevance**: Applicability of illustrative materials to real situations
+- **Error Message Helpfulness**: Guidance provided when things go wrong
+- **Workflow Integration**: Smooth incorporation into existing processes
+- **Automation Friendliness**: Ease of scripting and batch processing
+- **Custom Report Generation**: Facility to create tailored summaries
+- **Dashboard Utility**: Value of visual displays for monitoring and insight
+- **Alert Appropriateness**: Correctness and timeliness of notifications
+- **Export Facilitation**: Easy movement of data to other systems
+- **Import Simplicity**: Straightforward bringing in of external data
+- **Format Support**: Compatibility with various data representations
+- **Validation Assistance**: Help in checking correctness of inputs
+- **Transformation Capability**: Ability to change data from one form to another
+- **Calculation Assistance**: Help in performing mathematical operations
+- **Storage Longevity**: Duration for which data can be reliably kept
+- **Retrieval Speed**: Quick access to stored information
+- **Concurrent Handling**: Ability to manage multiple users or processes
+- **Scalability Readiness**: Preparedness for growth in usage or data volume
+- **Performance Consistency**: Stable behavior under varying loads
+- **Resource Efficiency**: Minimal consumption per unit of work
+- **Bottleneck Identification**: Detection of performance limiting factors
+- **Throughput Maximization**: Greatest amount of work per unit time
+- **Latency Reduction**: Minimization of delay between request and response
+- **Jitter Reduction**: Decrease in variability of response timing
+- **Availability Increase**: Greater proportion of time system is operable
+- **Reliability Improvement**: Fewer failures and interruptions
+- **Maintainability Simplicity**: Ease of keeping in working order
+- **Update Tranquility**: Infrequency of disruptive changes
+- **Upgrade Smoothness**: Seamless transition to newer versions
+- **Backout Facility**: Ability to return to previous versions if needed
+- **Patch Compatibility**: Updates apply cleanly without conflicts
+- **Dependency Management**: Clean handling of external code libraries
+- **Conflict Resolution**: Proper resolution when versions disagree
+- **Isolation**: Freedom from interference by other systems
+- **Encapsulation**: Clean separation of internal workings from interface
+- **Modularity**: Facility to divide into independent components
+- **Layering**: Clear separation of concerns into hierarchical levels
+- **Polymorphism**: Ability to process different types uniformly
+- **Inheritance**: Reuse and extension through hierarchical relationships
+- **Abstraction**: Separation of interface from implementation details
+- **Encapsulation Quality**: Degree to which internals are hidden
+- **Coupling Level**: Strength of connections between components
+- **Source Availability**: Ability to inspect and modify underlying code
+- **Build Simplicity**: Ease of creating executable versions
+- **Dependency Clarity**: Obvious what other code is required
+- **Build Reproducibility**: Consistent results from identical inputs
+- **Cross-platform Compatibility**: Work on multiple operating systems
+- **Portability**: Easy movement between different environments
+- **Installation Simplicity**: Straightforward setup process
+- **Uninstall Cleanliness**: Complete removal when no longer wanted
+- **Upgrade Path Clarity**: Obvious route to newer versions
+- **Downgrade Facility**: Ability to revert to previous versions if needed
+- **Virtualization Compatibility**: Work well in virtual machines
+- **Container Readiness**: Suitability for package deployment approach
+- **Cloud Native Design**: Built specifically for cloud environments
+- **Service Mesh Readiness**: Preparedness for advanced networking approaches
+- **Serverless Applicability**: Suitability for function-as-a-service platforms
+- **Edge Computing Feasibility**: Ability to work in resource-constrained settings
+- **IoT Integration**: Compatibility with internet of things devices
+- **Real-time Performance**: Ability to meet strict timing requirements
+- **Deterministic Behavior**: Predictable timing and resource usage
+- **Jitter Minimization**: Reduction in timing variability
+- **QoS Support**: Ability to prioritize different types of traffic
+- **Traffic Shaping**: Control over flow and timing of data
+- **Resource Reservation**: Guaranteeing access to needed capabilities
+- **Admission Control**: Limiting concurrent users to maintain quality
+- **Fair Queuing**: Equitable treatment of different flow types
+- **Congestion Control**: Response to network overload situations
+- **Reliability Protocols**: Mechanisms to ensure delivery despite losses
+- **Ordering Guarantees**: Preservation of sequence despite network effects
+- **Duplicate Suppression**: Elimination of redundant receptions
+- **Fragmentation Handling**: Proper reassembly of divided transmissions
+- **Header Compression**: Reduction of protocol overhead
+- **Flow Control**: Prevention of receiver overwhelm
+- **Error Detection**: Discovery of transmission problems
+- **Error Correction**: Fixing of detectable issues
+- **Retransmission Strategies**: Approaches to resend lost data
+- **Acknowledgment Mechanisms**: Signals confirming successful receipt
+- **Timeout Settings**: Durations after which action is taken
+- **Window Sizing**: Buffers for managing data flow
+- **Congestion Avoidance**: Proactive measures to prevent overload
+- **Slow Start**: Graduated increase in transmission rate
+- **Fast Recovery**: Quick return to normal after congestion
+- **Congestion Avoidance**: Proactive measures to prevent network issues
+- **Fast Retransmit**: Quick resend upon detecting loss
+- **Network Familiarity**: Experience with similar communication systems
+- **Protocol Knowledge**: Understanding of rules and formats
+- **Implementation Simplicity**: Ease of putting into practice
+- **Hardware Requirements**: Physical resources needed to operate
+- **Software Dependencies**: Other code required for functionality
+- **Configuration Transparency**: Obvious effect of adjustment settings
+- **Default Sensibility**: Reasonable behavior when not customized
+- **Learning Materials**: Resources available to acquire proficiency
+- **Community Size**: Number of people using and supporting
+- **Maturity Level**: Degree of development and stabilization
+- **Adoption Rate**: Speed at which others begin using
+- **Sustained Interest**: Continued attention over time
+- **Professional Services**: Availability of expert assistance
+- **Training Programs**: Formal instruction offerings
+- **Certification Options**: Verified proficiency credentials
+- **Consulting Network**: Access to advisory expertise
+- **Integration Partners**: Companies offering connection services
+- **Hardware Ecosystem**: Complementary physical products
+- **Software Ecosystem**: Complementary code and tools
+- **Reference Implementations**: Authoritative examples to follow
+- **Benchmark Suites**: Standardized tests for performance measurement
+- **Best Practices Collections**: Aggregated wisdom from experience
+- **Case Study Libraries**: Real-world examples of application
+- **Whitepaper Collections**: In-depth explanatory documents
+- **Webinar Archives**: Recorded educational presentations
+- **Forum Discussions**: Online conversations about usage and issues
+- **Issue Trackers**: Public repositories for reporting problems
+- **Pull Request Mechanics**: Process for contributing improvements
+- **Release Notes**: Documentation of changes in each version
+- **Roadmap Transparency**: Clear communication of future plans
+- **Vision Statements**: Long-term aspirations and goals
+- **Mission Definition**: Core purpose and reason for existence
+- **Value Proposition**: Specific benefits offered to users
+- **Target Audience**: Intended recipients of the offering
+- **Market Position**: Standing relative to alternatives and competitors
+- **Unique Differentiators**: Characteristics setting it apart from others
+- **Competitive Advantages**: Factors contributing to superior performance
+- **Market Share**: Portion of total available customers captured
+- **Growth Rate**: Speed at which user base is increasing
+- **Retention Rate**: Proportion of users continuing to use over time
+- **Churn Rate**: Rate at which users discontinue use
+- **Expansion Revenue**: Additional income from existing customers
+- **Upsell Potential**: Opportunity to sell more to current users
+- **Cross-sell Compatibility**: Ability to bundle with related offerings
+- **Referral Effectiveness**: Success in motivating recommendations
+- **Viral Coefficient**: Average new users brought by each existing user
+- **Network Effects**: Increased value as more people use
+- **Switching Costs**: Difficulty of moving to alternative solutions
+- **Customer Lifetime Value**: Total expected revenue from relationship
+- **Acquisition Cost**: Expense to gain each new user
+- **Payback Period**: Time to recover investment through earnings
+- **Profit Margin**: Percentage of revenue remaining as earnings
+- **Return on Investment**: Gain or loss relative to resources expended
+- **Economic Value Added**: Wealth created beyond cost of capital
+- **Social Return on Investment**: Broader benefit to society
+- **Environmental Impact**: Effect on natural world and ecosystems
+- **Resource Consumption**: Amount of materials used in operation
+- **Waste Generation**: Byproducts requiring disposal or recycling
+- **Recyclability**: Portion that can be reclaimed for reuse
+- **Biodegradability**: Ability to break down naturally over time
+- **Toxicity**: Harmfulness to living organisms
+- **Energy Efficiency**: Useful work per unit of energy consumed
+- **Carbon Footprint**: Greenhouse gas emissions attributable to operation
+- **Renewable Energy Use**: Portion of power from sustainable sources
+- **Emissions Offsetting**: Compensation for unavoidable pollution
+- **Sustainability Reporting**: Disclosure of environmental performance
+- **Regulatory Compliance**: Adherence to ecological laws and rules
+- **Green Certifications**: Third-party validation of environmental claims
+- **Circular Economy Principles**: Minimizing waste and maximizing reuse
+- **Life Cycle Assessment**: Total impact from creation to disposal
+- **Supply Chain Review**: Examination of environmental practices upstream
+- **End-of-life Planning**: Preparation for eventual discontinuation
+- **Take-back Programs**: Acceptance of used products for recycling
+- **Design for Disassembly**: Easy separation into constituent materials
+- **Material Selection**: Preferring environmentally benign substances
+- **Manufacturing Processes**: Low-impact creation techniques
+- **Packaging Optimization**: Minimizing materials used for containment
+- **Transportation Efficiency**: Moving goods with minimal ecological impact
+- **Usage Patterns**: How product is actually employed in practice
+- **Maintenance Impact**: Effect of upkeep on environmental burden
+- **Upgrade Path**: Environmental considerations for improvements
+- **Refurbishment Potential**: Ability to restore to like-new condition
+- **Remanufacturing Feasibility**: Ability to rebuild from used components
+- **Reuse Viability**: Practicality of employing again in different role
+- **Recycling Practicality**: Feasibility of processing for material recovery
+- **Energy Recovery**: Obtaining usable power from waste materials
+- **Landfill Avoidance**: Keeping waste out of final disposal sites
+- **Incineration Considerations**: Controlled burning for volume reduction
+- **Hazardous Waste Handling**: Special treatment for dangerous materials
+- **Radioactive Protocols**: Safe management of radioactive substances
+- **Medical Waste Protocols**: Proper disposal of healthcare byproducts
+- **Electronic Waste Handling**: Proper treatment of discarded electronics
+- **Construction Waste**: Debris from building activities
+- **Agricultural Waste**: Byproducts of farming operations
+- **Industrial Waste**: Output from manufacturing processes
+- **Service Waste**: Leftover materials from providing assistance
+- **Virtual Waste**: Digital byproducts requiring management
+- **Data Waste**: Useless information requiring deletion or archiving
+- **Process Waste**: Inefficiencies in operational methods
+- **Time Waste**: Unproductive use of temporal resources
+- **Opportunity Waste**: Missed chances for beneficial actions
+- **Resource Waste**: Suboptimal use of materials or capabilities
+- **Human Waste**: Underutilization of people's abilities and potential
+- **Knowledge Waste**: Lost or forgotten information and skills
+- **Innovation Waste**: Failed attempts at novelty and improvement
+- **Relationship Waste**: Damaged or neglected interpersonal connections
+- **Reputation Waste**: Harm to standing and public perception
+- **Trust Waste**: Erosion of confidence and dependability
+- **Goodwill Waste**: Loss of positive feelings and associations
+- **Brand Waste**: Damage to identity and market presence
+- **Intellectual Property Waste**: Failure to leverage creations and inventions
+- **Strategic Waste**: Misapplication of long-term planning and vision
+- **Operational Waste**: Inefficiencies in day-to-day functioning
+- **Administrative Waste**: Inefficiencies in management and overhead
+- **Compliance Waste**: Resources spent meeting unnecessary rules
+- **Legal Waste**: Costs from avoidable legal entanglements
+- **Financial Waste**: Suboptimal use of monetary resources
+- **Financial Waste**: Suboptimal use of monetary resources
+- **Financial Waste**: Suboptimal use of monetary resources
+- **Financial Waste**: Suboptimal use of monetary resources
