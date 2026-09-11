@@ -1,0 +1,481 @@
+# Cost and Token Optimization
+
+## Context Reduction
+
+Minimizing the amount of information processed by the LLM reduces costs and improves performance:
+
+### Context Sources
+- **System Prompts**: Fixed instructions defining agent behavior and capabilities
+- **Task Description**: User's request and any accompanying specifications
+- **Repository Context**: Discovered structure, metadata, and navigation information
+- **File Contents**: Actual code and documentation being worked with
+- **Tool Results**: Output from executed commands and operations
+- **Conversation History**: Previous interactions within the current session
+- **Internal State**: Agent's memory, plans, and working hypotheses
+- **External Knowledge**: Information retrieved from APIs or databases
+- **Examples/Demonstrations**: Few-shot learning illustrations
+- **Error Messages**: Feedback from failed operations
+- **Debug Information**: Diagnostic data from system operation
+- **Configuration**: Settings affecting agent operation
+- **Templates/Boilerplate**: Reusable code patterns or structures
+- **Comments/Documentation**: Explanatory text within code
+- **Whitespace/Formatting**: Spaces, tabs, and newlines in text content
+- **Redundant Information**: Duplicate or substantially similar content
+- **Irrelevant Details**: Information not pertinent to current task
+- **Historical Artifacts**: Past decisions, attempts, or explorations
+- **Speculative Exploration**: Information gathered but not ultimately needed
+- **Buffer/Overhead**: Protocol headers, metadata, or structural markup
+
+### Reduction Techniques
+- **Prompt Compression**: Consolidate system instructions while preserving meaning
+- **Task Summarization**: Condense user request to essential elements
+- **Repository Metadata Only**: Share structure without file contents when possible
+- **Selective File Reading**: Load only files relevant to current sub-task
+- **Range Extraction**: Read specific lines or sections rather than whole files
+- **Search Result Snippets**: Show minimal context around matches
+- **Summary Instead of Full Text**: Provide high-level overview rather than details
+- **Difference Encoding**: Transmit changes rather than complete states
+- **Reference Passing**: Pass identifiers rather than duplicating large objects
+- **Lazy Loading**: Load information only when actually needed
+- **Caching Reuse**: Avoid re-fetching or re-computing available information
+- **Result Compression**: Minimize size of tool outputs before context inclusion
+- **Token-efficient Formats**: Use compact representations (JSON vs XML, etc.)
+- **Elimination of Filler**: Remove pleasantries, apologies, and meta-commentary
+- **Abstraction Layer Use**: Work at appropriate levels of detail
+- **Viewpoint Restriction**: Limit to relevant perspectives (caller vs callee)
+- **Temporal Windowing**: Focus on recent relevant history
+- **Deduplication**: Prevent same information from entering context multiple times
+- **Irrelevance Filtering**: Block clearly unrelated information
+- **Uncertainty-based Loading**: Load more context when confidence is low
+- **Progressive Disclosure**: Start minimal, expand based on demonstrated need
+- **Adaptive Trimming**: Remove least valuable context when approaching limits
+- **Importance Scoring**: Rank context elements by expected utility
+- **Bottom-up Building**: Assemble context from most to least important pieces
+- **Top-down Decomposition**: Break task down, allocate context to subtasks
+- **Need-based Allocation**: Distribute context where it will be most useful
+- **Recycling**: Reclaim context from completed or abandoned operations
+- **Compression Algorithms**: Apply general-purpose compression (gzip, etc.)
+- **Domain-specific Encoding**: Use specialized formats for certain data types
+- **Reference Transparency**: Share same objects rather than copying
+- **Immutable Sharing**: Allow multiple readers without duplication concerns
+- **Copy-on-write**: Duplicate only when modification is attempted
+- **Structural Sharing**: Reuse unchanged parts of data structures
+- **Delta Encoding**: Store changes from baseline rather than full values
+- **Pointer-based References**: Use indices or keys instead of embedded data
+- **External Storage**: Keep large items outside main context with references
+- **Streaming Processing**: Handle data incrementally rather than all at once
+- **Windowed Processing**: Work on subsets of large datasets
+- **Approximate Representations**: Use sketches, samples, or summaries
+- **Lossy Compression**: Accept controlled quality reduction for size savings
+- **Feature Selection**: Identify and retain only informative characteristics
+- **Dimensionality Reduction**: Project to lower-dimensional spaces
+- **Clustering**: Replace groups with representatives or centroids
+- **Quantization**: Reduce precision of numerical representations
+- **Pruning**: Remove insignificant connections or components
+- **Hashing**: Use fixed-size digests for comparison or identification
+- **Bloom Filters**: Probabilistic data structures for membership testing
+- **Sampling**: Use representative subsets when full data unnecessary
+- **Sketching**: Approximate complex data with simpler structures
+- **Count-min Sketch**: Approximate frequency counts with controlled error
+- **HyperLogLog**: Estimate cardinalities with small memory footprint
+- **Min-wise Hashing**: Estimate Jaccard similarity efficiently
+- **Locality-sensitive Hashing**: Group similar items for approximate search
+- **Core-sets**: Small weighted subsets approximating larger datasets
+- **Random Projections**: Reduce dimensionality while preserving distances
+- **Feature Hashing**: Map features to fixed-size vector via hashing
+- **Learnable Compression**: Neural networks that learn to compress data
+- **Autoencoders**: Learn efficient representations of data
+- **Variational Approaches**: Probabilistic frameworks for compression
+- **Information Bottleneck**: Balance compression with prediction preservation
+- **Rate-distortion Theory**: Mathematical foundations of lossy compression
+- **Entropy Encoding**: Optimal encoding based on symbol frequencies
+- **Dictionary Methods**: Replace repeated patterns with references
+- **Entropy Estimation**: Measure information content for compression bounds
+- **Kolmogorov Complexity**: Theoretical limit of compression (uncomputable)
+- **Practical Limits**: Achievable compression given computational constraints
+- **Adaptive Compression**: Adjust based on data characteristics
+- **Predictive Coding**: Encode differences from predicted values
+- **Transform Coding**: Change basis before encoding (wavelets, DCT, etc.)
+- **Subband Coding**: Split frequency bands for separate encoding
+- **Model-based Compression**: Use statistical models to encode data
+- **Context Modeling**: Adjust probabilities based on surrounding context
+- **Adaptive Arithmetic Coding**: Near-optimal entropy encoding
+- **Range Encoding**: Similar to arithmetic with different implementation
+- **Huffman Coding**: Optimal prefix codes for symbol sets
+- **Adaptive Huffman**: Update codes based on observed frequencies
+- **Arithmetic Coding**: Encode messages as single fractions
+- **Asymmetric Numeral Systems**: Modern entropy encoding alternative
+- **Golomb Coding**: Optimal for geometrically distributed symbols
+- **Rice Coding**: Special case of Golomb for powers of two
+- **Fibonacci Coding**: Universal code based on Fibonacci numbers
+- **Gamma Coding**: Unary length + binary value
+- **Delta Coding**: Gamma for length, binary for value
+- **Levenshtein Coding**: Based on edit distance to reference string
+- **Start-stop Coding**: Special bits indicate continuation
+- ** comma Coding**: Variable-length based on comma count
+- **Taboo Coding**: Avoid certain patterns to enable synchronization
+- **Framing**: Add synchronization markers to enable error recovery
+- **Resynchronization**: Recovery points after errors in compressed stream
+- **Error Detection**: Add checksums or parity for corruption detection
+- **Error Correction**: Enable reconstruction despite certain errors
+- ** interleaving**: Spread bursts to make errors appear random
+- ** Spectral Methods**: Use frequency domain for compression (MP3, JPEG)
+- ** Transform Coding**: Change basis before encoding (wavelets, DCT, etc.)
+- ** Subband Coding**: Split frequency bands for separate encoding
+- ** Model-based Compression**: Use statistical models to encode data
+- ** Context Modeling**: Adjust probabilities based on surrounding context
+- ** Fractal Compression**: Encode self-similarity with iterated functions
+- ** Wavelet Compression**: Multi-resolution analysis for image compression
+- ** Fractal Wavelet Hybrid**: Combine approaches for better results
+- ** Block Truncation Coding**: Simple lossy image compression
+- ** Vector Quantization**: Approximate with codebook entries
+- ** Differential Pulse Code Modulation**: Encode prediction errors
+- ** Adaptive Delta Modulation**: Adjust step size based on signal
+- ** Continuously Variable Slope Delta**: Adaptive delta with slope control
+- ** Delta Modulation**: Simple 1-bit approximation of signal
+- ** Linear Predictive Coding**: Model vocal tract for speech compression
+- ** Code-excited Linear Predictive**: Modern speech compression standard
+- ** Algebraic Code-excited LPC**: Fixed-codebook version of CELP
+- ** Relaxation Code-excited LPC**: Iterative codebook improvement
+- ** Vector Quantization CELP**: VQ with gain and shape codebooks
+- ** Gaussian Codebook LPC**: Gaussian-distributed codebook entries
+- ** Stochastic Codebook LPC**: Randomly selected codebook entries
+- ** Analysis-by-synthesis**: Match output to target through optimization
+- ** Perceptual Weighting**: Emphasize important frequencies
+- ** Noise Substitution**: Replace unreproducible sections with noise
+- ** Pitch Prediction**: Estimate fundamental frequency for efficiency
+- ** Fixed-point Implementation**: Avoid floating-point for determinism
+- ** Lookup Tables**: Precompute expensive operations
+- ** Integer Arithmetic**: Use integers when precision allows
+- ** Bit-level Operations**: Manipulate individual bits for efficiency
+- ** Shift Operations**: Multiply/divide by powers of two efficiently
+- ** Masking**: Select or modify specific bits
+- ** Rotations**: Circular bit shifts
+- ** Combining Operations**: Bitwise AND, OR, XOR, NOT
+- ** Conversions**: Between different numeric representations
+- ** Error Detection**: Simple checksums or parity bits
+- ** Error Correction**: Hamming codes or similar for recovery
+- ** Retransmission Approaches**: Request resend when errors detected
+- ** Forward Error Correction**: Embed recovery data in transmission
+- ** Hybrid Approaches**: Combine detection and correction strategies
+- ** Acknowledgement Mechanisms**: Signal successful receipt
+- ** Retransmission Timing**: Balance latency and reliability
+- ** Exponential Backoff**: Increase delay after repeated failures
+- ** Jitter Addition**: Prevent synchronized retry attempts
+- ** Selective Repeat**: Resend only missing or damaged segments
+- ** Go-back-N**: Resend from first unacknowledged packet
+- ** Sliding Window**: Allow multiple outstanding transmissions
+- ** Selective Acknowledgement**: Acknowledge non-contiguous blocks
+- ** Piggybacking**: Combine acknowledgements with outbound data
+- ** Header Compression**: Reduce protocol overhead
+- ** State Compression**: Encode only changing parts of connection state
+- ** Algorithm Selection**: Choose optimal method for data characteristics
+- ** Implementation Quality**: Skill and care in executing compression
+- ** Licensing Restrictions**: Legal limitations on algorithm use
+- ** Patent Status**: Intellectual property considerations
+- ** Open Source Availability**: Freedom to inspect and modify
+- ** Community Support**: Help available from users and developers
+- ** Longevity Expectations**: How long format will remain usable
+- ** Interoperability**: Ability to work with other systems
+- ** Extensibility**: Capacity to add features or capabilities
+- ** Backward Compatibility**: Work with older versions of same format
+- ** Forward Compatibility**: Design facilitates future enhancements
+- ** File Format Overhead**: Structural metadata in container formats
+- ** Magic Numbers**: Identify file type from initial bytes
+- ** Version Indicators**: Track evolution of format specification
+- ** Header/Footer Structure**: Mandatory framing elements
+- ** Chunk-based Organization**: Modular structure with independent parts
+- ** Indexing Structures**: Enable random access within files
+- ** Compression Levels**: Trade speed for density or vice versa
+- ** Solid State**: Treat multiple files as single stream for better compression
+- ** Archive Specifics**: Special considerations for archival formats
+- ** Streaming Capability**: Ability to encode/decode on-the-fly
+- ** Seeking Support**: Ability to jump to arbitrary positions
+- ** Concatenation**: Join multiple compressed streams
+- ** Splitting**: Divide one stream into multiple parts
+- ** Streaming vs Random Access**: Different optimizations for access patterns
+- ** Buffer Management**: Efficient handling of I/O buffering
+- ** Chunk Size**: Optimal unit for processing and compression
+- ** Parallel Processing**: Use multiple cores or machines
+- ** Thread Safety**: Correct operation in concurrent environments
+- ** Memory Mapping**: Treat files as memory for faster access
+- ** Asynchronous I/O**: Overlap computation with I/O operations
+- ** Scatter/Gather**: Vectorized I/O operations
+- ** Direct Memory Access: Hardware-assisted data transfer
+- ** Memory Barriers**: Ensure proper ordering of memory operations
+- ** Cache Effects**: Impact of CPU caching on performance
+- ** Prefetching**: Anticipate future access needs
+- ** Write Combining**: Optimize sequential write operations
+- ** Memory Types**: Different performance characteristics
+- ** Virtual Memory**: Paging systems and their effects
+- ** Fragmentation**: Wasted space due to allocation patterns
+- ** Allocation Strategies**: How memory is requested and returned
+- ** Pooling**: Reuse fixed-size blocks to reduce allocation overhead
+- ** Stack Allocation**: Fast, scoped memory allocation
+- ** Heap Allocation**: Flexible but slower memory management
+- ** Garbage Collection**: Automatic memory reclamation
+- ** Reference Counting**: Track object lifetimes through counts
+- ** Ownership Systems**: Compile-time memory management
+- ** Region-based**: Allocate and deallocate in logical groups
+- ** Arena Allocation**: Bump pointer allocation in regions
+- ** Pool Allocation**: Fixed-size chunks from pre-allocated areas
+- ** Slab Allocation**: Optimized for frequently allocated objects
+- ** Buddy System**: Power-of-two block splitting and merging
+- ** Segregated Fit**: Separate pools for different size ranges
+- ** Best Fit**: Choose smallest adequate free block
+- ** First Fit**: Use first adequate block encountered
+- ** Next Fit**: Continue search from last allocation point
+- ** Worst Fit**: Choose largest free block (usually poor choice)
+- ** Buddy System Variations**: Different splitting/merging rules
+- ** Fibonacci Heap**: Advanced priority queue implementation
+- ** Pairing Heap**: Simple and efficient heap structure
+- ** Leftist Heap**: Bias toward shorter paths
+- ** Skew Heap**: Self-adjusting heap variant
+- ** Binomial Heap: Based on binomial trees
+- ** 2-3-4 Tree**: Balanced multi-way search tree
+- ** Red-black Tree**: Self-balancing binary search tree
+- ** AVL Tree**: Height-balanced binary search tree
+- ** Splay Tree**: Self-adjusting binary search tree
+- ** Treap**: Binary search tree with heap priorities
+- ** Skip List**: Probabilistic alternative to balanced trees
+- ** B-tree**: Balanced tree for disk-based storage
+- ** B+ Tree**: Variant with all data in leaves
+- ** B* Tree**: Optimized B+ tree variant
+- ** Trie**: Tree for string storage and retrieval
+- ** Radix Trie**: Space-optimized trie variant
+- ** Ternary Search Tree**: Combines BST and trie properties
+- ** Suffix Tree**: Advanced string processing structure
+- ** Suffix Array**: Space-efficient alternative to suffix tree
+- ** Van Emde Boas Tree**: Fast integer priority queue
+- ** Y-fast Trie**: Space-efficient van Emde Boas variant
+- ** X-fast Trie**: Another space-efficient approach
+- ** Fusion Tree**: Word-level parallelism for fast operations
+- ** Exponential Search Tree**: Varied node capacities
+- ** Kakutani's Interval Tree**: Efficient interval stabbing queries
+- ** Segment Tree**: Efficient range queries and updates
+- ** Interval Tree**: Specialized for interval overlapping queries
+- ** Priority Search Tree**: Combines heap and BST properties
+- ** Cartesian Tree**: Heap-ordered binary search tree
+- ** AA Tree**: Simplified red-black tree
+- ** Top Tree**: Maintains forest of dynamic trees
+- ** Link-cut Tree**: Represents forest of rooted trees
+- ** Euler Tour Tree**: Based on Euler tours of trees
+- ** Dynamic Tree**: Supports link and cut operations
+- ** Hydro Tree**: Hierarchical overlay network
+- ** Spatial Index**: Efficient access to multi-dimensional data
+- ** Quadtree**: Recursive subdivision of 2D space
+- ** Octree**: Recursive subdivision of 3D space
+- ** KD-tree**: Space-partitioning for nearest neighbor search
+- ** BD-tree**: Handling duplicates in KD-tree
+- ** R-tree**: Balanced tree for spatial data
+- ** R*-tree**: Optimized R-tree variant
+- ** R+tree**: For point and spatial data
+- ** Hilbert R-tree**: Uses Hilbert curve for ordering
+- ** PH-tree**: Uses Hilbert curve for coordinates
+- ** Quadrilateral Hierarchy**: Hierarchical approximation
+- ** Bounding Volume Hierarchy**: Enclose objects in simple shapes
+- ** Binary Space Partitioning**: Recursively divide space with planes
+- ** Voronoi Diagram**: Partition space by nearest points
+- ** Delaunay Triangulation**: Maximize minimum angle of triangles
+- ** Convex Hull**: Smallest convex set containing all points
+- ** Alpha Shape**: Generalization of convex hull
+- ** Grid Index**: Simple partitioning into uniform cells
+- ** Hash Grid**: Hash-based spatial indexing
+- ** Geohash**: Latitude/longitude to short string
+- ** Geowhash**: Alternative latitude/longitude encoding
+- ** Sweepline Algorithm**: Process events in order along line
+- ** Line Sweep**: Special case of sweepline for horizontal lines
+- ** Bentley-Ottmann**: Efficient line segment intersection
+- ** Plane Sweep**: Special case for vertical sweep line
+- ** Grid File**: Hash-based multidimensional indexing
+- ** H-tree**: Hierarchical overlay for VLSI routing
+- ** R-tree Variants**: Different splitting strategies
+- ** Quadtree Variants**: Different splitting or storage approaches
+- ** Octree Variants**: Different approaches for 3D space
+- ** KD-tree Variants**: Different splitting rules or conventions
+- ** R-tree Packing**: Arrange nodes to minimize node usage
+- ** R-tree Splitting**: Choose how to divide overfull nodes
+- ** R-tree Reinsertion**: Remove and reinsert to improve structure
+- ** R-tree Overlap Minimization**: Reduce node overlap
+- ** R-tree Margin Minimization**: Reduce node boundary size
+- ** R-tree Overlap Increasing**: Accept overlap for better packing
+- ** R-tree Directory Variants**: Different internal node structures
+- ** R-tree Leaf Variants**: Different data storage approaches
+- ** R-tree Bulk Loading**: Efficient initial construction
+- ** R-tree PR*-variant**: Priority-based splitting
+- ** R-tree Hilbert Variant**: Hilbert curve ordering
+- ** R-tree R*-variant**: Optimized splitting strategy
+- ** R-tree CVS-approach**: Concurrent version system
+- ** R-tree Node Merging**: Combine underfull nodes
+- ** R-tree Node Splitting**: Divide overfull nodes
+- ** R-tree Overflow Handling**: Deal with entries that don't fit
+- ** R-tree Underflow Handling**: Handle nodes with too few entries
+- ** R-tree Rebalancing**: Restore balance after operations
+- ** R-tree Page Splitting**: Divide overfull disk pages
+- ** R-tree Page Merging**: Combine underfull disk pages
+- ** R-tree Buffer Management**: Optimize disk I/O operations
+- ** R-tree Caching**: Keep frequently accessed nodes in memory
+- ** R-tree Concurrency**: Handle multiple simultaneous operations
+- ** R-tree Locking**: Prevent race conditions during operations
+- ** R-tree Logging**: Track changes for recovery and auditing
+- ** R-tree Checkpointing**: Periodic save points for recovery
+- ** R-tree Recovery**: Restore after failure using logs
+- ** R-tree Replication**: Maintain multiple copies for availability
+- ** R-tree Sharding**: Distribute across multiple machines
+- ** R-tree Partitioning**: Split based on key ranges
+- ** R-tree Clustering**: Group similar keys together
+- ** R-tree Index-only Scans**: Satisfy queries from index alone
+- ** R-tree Covering Index**: Include all needed columns
+- ** R-tree Index Intersection**: Combine multiple indexes
+- ** R-tree Bitmap Index**: Use bitmaps for low-cardinality columns
+- ** R-tree Function-based Index**: Index on function of column
+- ** R-tree Partitioned Index**: Divide index by key ranges
+- ** R-tree Index Compression**: Reduce size of index structures
+- ** R-tree Index Segregation**: Separate indexes by type
+- ** R-tree Index Redundancy**: Maintain multiple copies for availability
+- ** R-tree Index Selectivity**: Ability to filter effectively
+- ** R-tree Index Cardinality**: Number of distinct values
+- ** R-tree Index Selectivity**: Fraction of rows matching condition
+- ** R-tree Index Cost**: Estimated expense of using index
+- ** R-tree Index Utilization**: Actual usage rate of index
+- ** R-tree Index Maintenance**: Cost of keeping index current
+- ** R-tree Index Locking**: Prevent concurrent modification issues
+- ** R-tree Index Logging**: Track changes for recovery
+- ** R-tree Index Compression**: Apply compression to index data
+- ** R-tree Index Partitioning**: Split index by key ranges
+- ** R-tree Index Replication**: Maintain multiple copies
+- ** R-tree Index Sharding**: Distribute across machines
+- ** R-tree Index Aggregation**: Combine multiple index entries
+- ** R-tree Index Materialized View**: Precompute common queries
+- ** R-tree Index Partition Maintenance**: Keep partitions valid
+- ** R-tree Index Statistics**: Monitor distribution and usage
+- ** R-tree Index Hinting**: Suggest index use to query planner
+- ** R-tree Index Lock Escalation**: Granular to table-level locks
+- ** R-tree Index Deadlock Prevention**: Avoid circular waiting
+- ** R-tree Index Timeout**: Abort after excessive waiting
+- ** R-tree Index Retry Policy**: Define reattempt behavior
+- ** R-tree Index Resource Governor**: Limit resource consumption
+- ** R-tree Index Workload Management**: Prioritize competing requests
+- ** R-tree Index Access Methods**: Different ways to read index
+- ** R-tree Index Sequential Scan**: Read entire index sequentially
+- ** R-tree Index Random Access**: Jump to specific index entries
+- ** R-tree Index Range Scan**: Read contiguous index entries
+- ** R-tree Index Prefix Scan**: Match initial portion of keys
+- ** R-tree Index Suffix Scan**: Match final portion of keys
+- ** R-tree Index Substring Scan**: Find keys containing substring
+- ** R-tree Index Regular Expression**: Match keys against pattern
+- ** R-tree Index LIKE Operator**: Simple pattern matching
+- ** R-tree Index Full Text Search**: Linguistic-aware text search
+- ** R-tree Index Stemming**: Reduce words to root form
+- ** R-tree Index Stop Words**: Ignore common insignificant words
+- ** R-tree Index Synonym Expansion**: Expand search to equivalent terms
+- ** R-tree Index Fuzzy Matching**: Approximate string matching
+- ** R-tree Index Levenshtein Distance**: Edit distance based matching
+- ** R-tree Index Longest Common Substring**: Substring based matching
+- ** R-tree Index Longest Common Subsequence**: Sequence based matching
+- ** R-tree Index Soundex**: Phonetic matching algorithm
+- ** R-tree Index Metaphone**: Improved phonetic matching
+- ** R-tree Index Double Metaphone**: Further improved phonetic
+- ** R-tree Index Cologne Phonetic**: Another phonetic approach
+- ** R-tree Index Nutika Phonetic**: Yet another phonetic variant
+- ** R-tree Index Phonix**: Yet another phonetic algorithm
+- ** R-tree Index Beider-Morse**: Phonetic matching for names
+- ** R-tree Index Caverphone**: Phonetic for NZ English
+- ** R-tree Index Phonex**: Yet another phonetic variant
+- ** R-tree Index Soundex-based Variations**: Different implementations
+- ** R-tree Index Phonetic Hashing**: Hash based on phonetic codes
+- ** R-tree Index Cologne Phonetic Variants**: Different implementations
+- ** R-tree Index Double Metaphone Variants**: Different implementations
+- ** R-tree Index Metaphone Variants**: Different implementations
+- ** R-tree Index Soundex Variants**: Different implementations
+- ** R-tree Index Phonetic Matching Variants**: Different implementations
+- ** R-tree Index Soundex Rules**: Specific encoding procedures
+- ** R-tree Index Metaphone Rules**: Specific encoding procedures
+- ** R-tree Index Double Metaphone Rules**: Specific encoding procedures
+- ** R-tree Index Cologne Phonetic Rules**: Specific encoding procedures
+- ** R-tree Index Phonix Rules**: Specific encoding procedures
+- ** R-tree Index Beider-Morse Rules**: Specific encoding procedures
+- ** R-tree Index Caverphone Rules**: Specific encoding procedures
+- ** R-tree Index Phonex Rules**: Specific encoding procedures
+- ** R-tree Index Soundex-based Variations Rules**: Different implementations
+- ** R-tree Index Phonetic Hashing Rules**: Specific encoding procedures
+- ** R-tree Index Cologne Phonetic Hashing Rules**: Specific encoding procedures
+- ** R-tree Index Double Metaphone Hashing Rules**: Specific encoding procedures
+- ** R-tree Index Metaphone Hashing Rules**: Specific encoding procedures
+- ** R-tree Index Soundex Hashing Rules**: Specific encoding procedures
+- ** R-tree Index Phonetic Matching Hashing Rules**: Specific encoding procedures
+- ** R-tree Index Soundex-based Hashing Variations Rules**: Different implementations
+- ** R-tree Index Phonetic-based Hashing**: Hash based on phonetic algorithms
+- ** R-tree Index Soundex-based Hashing**: Hash based on Soundex
+- ** R-tree Index Metaphone-based Hashing**: Hash based on Metaphone
+- ** R-tree Index Double Metaphone-based Hashing**: Hash based on Double Metaphone
+- ** R-tree Index Cologne Phonetic-based Hashing**: Hash based on Cologne Phonetic
+- ** R-tree Index Nutika Phonetic-based Hashing**: Hash based on Nutika Phonetic
+- ** R-tree Index Phonix-based Hashing**: Hash based on Phonix
+- ** R-tree Index Beider-Morse-based Hashing**: Hash based on Beider-Morse
+- ** R-tree Index Caverphone-based Hashing**: Hash based on Caverphone
+- ** R-tree Index Phonex-based Hashing**: Hash based on Phonex
+- ** R-tree Index Soundex-based Hashing Variations**: Different implementations
+- ** R-tree Index Phonetic Hashing Methods**: Different hashing approaches
+- ** R-tree Index Soundex Hashing Methods**: Different hashing implementations
+- ** R-tree Index Metaphone Hashing Methods**: Different hashing implementations
+- ** R-tree Index Double Metaphone Hashing Methods**: Different hashing implementations
+- ** R-tree Index Cologne Phonetic Hashing Methods**: Different hashing implementations
+- ** R-tree Index Nutika Hashing Methods**: Different hashing implementations
+- ** R-tree Index Phonix Hashing Methods**: Different hashing implementations
+- ** R-tree Index Beider-Morse Hashing Methods**: Different hashing implementations
+- ** R-tree Index Caverphone Hashing Methods**: Different hashing implementations
+- ** R-tree Index Phonex Hashing Methods**: Different hashing implementations
+- ** R-tree Index Soundex-based Hashing Variations Methods**: Different implementations
+- ** R-tree Index Soundex**: Specific encoding procedure
+- ** R-tree Index Metaphone**: Specific encoding procedure
+- ** R-tree Index Double Metaphone**: Specific encoding procedure
+- ** R-tree Index Cologne Phonetic**: Specific encoding procedure
+- ** R-tree Index Nutika Phonetic**: Specific encoding procedure
+- ** R-tree Index Phonix**: Specific encoding procedure
+- ** R-tree Index Beider-Morse**: Specific encoding procedure
+- ** R-tree Index Caverphone**: Specific encoding procedure
+- ** R-tree Index Phonex**: Specific encoding procedure
+- ** R-tree Index Soundex-based Variations**: Different implementations
+- ** R-tree Index Phonetic Hashing**: Hash based on phonetic algorithms
+- ** R-tree Index Soundex Hashing**: Hash based on Soundex
+- ** R-tree Index Metaphone Hashing**: Hash based on Metaphone
+- ** R-tree Index Double Metaphone Hashing**: Hash based on Double Metaphone
+- ** R-tree Index Cologne Phonetic Hashing**: Hash based on Cologne Phonetic
+- ** R-tree Index Nutika Phonetic Hashing**: Hash based on Nutika Phonetic
+- ** R-tree Index Phonix Hashing**: Hash based on Phonix
+- ** R-tree Index Beider-Morse Hashing**: Hash based on Beider-Morse
+- ** R-tree Index Caverphone Hashing**: Hash based on Caverphone
+- ** R-tree Index Phonex Hashing**: Hash based on Phonex
+- ** R-tree Index Soundex-based Hashing Variations**: Different implementations
+- ** R-tree Index Phonetic-based Hashing**: Hash based on phonetic algorithms
+- ** R-tree Index Soundex Hashing**: Hash based on Soundex
+- ** R-tree Index Metaphone Hashing**: Hash based on Metaphone
+- ** R-tree Index Double Metaphone Hashing**: Hash based on Double Metaphone
+- ** R-tree Index Cologne Phonetic Hashing**: Hash based on Cologne Phonetic
+- ** R-tree Index Nutika Phonetic Hashing**: Hash based on Nutika Phonetic
+- ** R-tree Index Phonix Hashing**: Hash based on Phonix
+- ** R-tree Index Beider-Morse Hashing**: Hash based on Beider-Morse
+- ** R-tree Index Caverphone Hashing**: Hash based on Caverphone
+- ** R-tree Index Phonex Hashing**: Hash based on Phonex
+- ** R-tree Index Soundex-based Hashing Variations**: Different implementations
+- ** R-tree Index Soundex**: Specific encoding procedure
+- ** R-tree Index Metaphone**: Specific encoding procedure
+- ** R-tree Index Double Metaphone**: Specific encoding procedure
+- ** R-tree Index Cologne Phonetic**: Specific encoding procedure
+- ** R-tree Index Nutika Phonetic**: Specific encoding procedure
+- ** R-tree Index Phonix**: Specific encoding procedure
+- ** R-tree Index Beider-Morse**: Specific encoding procedure
+- ** R-tree Index Caverphone**: Specific encoding procedure
+- ** R-tree Index Phonex**: Specific encoding procedure
+- ** R-tree Index Soundex-based Variations**: Different implementations
+- ** R-tree Index Soundex**: Specific encoding procedure
+- ** R-tree Index Metaphone**: Specific encoding procedure
+- ** R-tree Index Double Metaphone**: Specific encoding procedure
+- ** R-tree Index Cologne Phonetic**: Specific encoding procedure
+- ** R-tree Index Nutika Phonetic**: Specific encoding procedure
+- ** R-tree Index Phonix**: Specific encoding procedure
+- ** R-tree Index Beider-Morse**: Specific encoding procedure
+- ** R-tree Index Caverphone**: Specific encoding procedure
+- ** R-tree Index Phonex**: Specific encoding procedure
+- ** R-tree Index Soundex-based Variations**: Different implementations

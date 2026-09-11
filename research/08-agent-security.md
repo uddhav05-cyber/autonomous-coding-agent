@@ -1,0 +1,361 @@
+# Agent Security
+
+## Prompt Injection
+
+Prompt injection involves manipulating an LLM's behavior through carefully crafted inputs:
+
+### Injection Types
+- **Direct Injection**: Explicit instructions that override or alter system prompts
+- **Indirect Injection**: Embedded in data the LLM processes (files, web content, etc.)
+- **Token Smuggling**: Using encoding or formatting to bypass filters
+- **Context Manipulation**: Altering conversation history to change behavior
+- **Role Play Attacks**: Convincing LLM it's a different entity with different goals
+- **Authority Impersonation**: Pretending to be system, developer, or authorized user
+- **Emergent Behavior**: Exploiting LLM tendencies to produce harmful outputs
+- **Jailbreaking**: Techniques to bypass safety measures and restrictions
+- **Continuous Injection**: Gradually steering behavior over multiple interactions
+- **Multi-stage Injection**: Complex attacks requiring multiple steps to succeed
+
+### Attack Vectors
+- **User Input**: Direct task descriptions or queries from users
+- **File Contents**: Code, documentation, or data the agent reads
+- **Configuration Files**: Settings that influence agent behavior
+- **Version Control Data**: Commit messages, branch names, or metadata
+- **External APIs**: Data fetched from web services or databases
+- **Environment Variables**: System settings that affect operation
+- **Memory/State**: Persistent information from previous sessions
+- **Tool Results**: Output from executed commands or operations
+- **Error Messages**: Feedback from failed operations
+- **Logs and Traces**: Diagnostic information from system operation
+- **Network Traffic**: Data received from external connections
+- **Hardware Sensors**: Input from physical devices (if applicable)
+- **Inter-process Communication**: Messages from other system components
+- **Clipboard Contents**: Data pasted from user's clipboard
+- **Drag and Drop**: Files or information dragged into interface
+- **Voice Input**: Speech-to-text transcriptions
+- **Image OCR**: Text extracted from images or screenshots
+- **PDF Metadata**: Embedded information in documents
+- **Archive Contents**: Files within compressed or packaged data
+- **Network Responses**: Headers, status codes, or protocol details
+- **Debug Information**: Development or diagnostic data
+- **Telemetry Data**: Usage or performance information
+- **Feature Flags**: Configuration toggles affecting behavior
+- **A/B Test Data**: Experimental variant specifications
+
+### Defense Strategies
+- **Input Validation**: Check and sanitize all external inputs before processing
+- **Output Encoding**: Properly encode LLM outputs to prevent injection in downstream systems
+- **Prompt Separation**: Clearly distinguish system prompts from user/data content
+- **Delimiter Isolation**: Use unique markers unlikely to appear in natural text
+- **Instruction Hierarchy**: Establish clear precedence of system over user instructions
+- **Sandwiching**: Place user input between fixed, trusted prompt components
+- **Randomization**: Add unpredictable elements to prevent exact replication attacks
+- **Template Restriction**: Limit acceptable input formats to reduce attack surface
+- **Length Limiting**: Constrain input size to prevent buffer overflow-style attacks
+- **Character Filtering**: Block or escape dangerous characters and sequences
+- **Pattern Matching**: Detect known injection patterns or signatures
+- **Behavioral Monitoring**: Watch for signs of manipulated behavior
+- **Anomaly Detection**: Identify deviations from normal operation patterns
+- **Consistency Checking**: Verify responses align with established patterns
+- **Confidence Scoring**: Measure certainty in responses to detect manipulation
+- **Few-shot Defense**: Show examples of proper behavior to reinforce correct responses
+- **Chain-of-Thought Verification**: Validate reasoning process, not just final answer
+- **Self-consistency Checks**: Run multiple variations and look for agreement
+- **External Validation**: Use trusted sources to check LLM claims
+- **Tool-mediated Responses**: Route answers through verified tools when possible
+- **Response Sandboxing**: Isolate LLM output before presenting or acting on it
+- **Gradual Trust Building**: Increase autonomy only after demonstrating reliability
+- **Human-in-the-Loop**: Require approval for sensitive operations
+- **Activity Logging**: Record all inputs and outputs for audit and analysis
+- **Real-time Intervention**: Ability to stop or modify agent behavior mid-operation
+- **Kill Switches**: Immediate halt mechanisms for clearly harmful behavior
+- **Quota Systems**: Limit potentially dangerous operations per time period
+- **Rate Limiting**: Restrict frequency of sensitive requests or actions
+- **Geofencing**: Restrict operation based on location or network origin
+- **Time-based Restrictions**: Limit certain operations to specific times
+- **Dependency Verification**: Validate integrity and authenticity of external components
+- **Code Signing**: Verify digital signatures on executable components
+- **Checksum Validation**: Ensure files haven't been tampered with
+- **Environment Hardening**: Minimize attack surface of execution environment
+- **Principle of Least Privilege**: Run with minimum necessary permissions
+- **Network Segmentation**: Isolate agent from unnecessary network access
+- **Firewall Rules**: Control inbound and outbound network traffic
+- **Intrusion Detection**: Monitor for signs of compromise or attack
+- **Vulnerability Scanning**: Regularly check for known weaknesses
+- **Patch Management**: Keep software up to date with security fixes
+- **Configuration Management**: Maintain secure baseline configurations
+- **Access Control**: Restrict who can interact with or modify the agent
+- **Authentication Verification**: Confirm identities of users and systems
+- **Authorization Checking**: Ensure proper permissions for requested operations
+- **Audit Trails**: Immutable records of security-relevant events
+- **Incident Response**: Planned reactions to security breaches or incidents
+- **Forensic Capability**: Ability to investigate and reconstruct attacks
+- **Recovery Procedures**: Restore normal operation after security events
+- **Lessons Learned**: Extract improvements from security incidents
+- **Threat Intelligence**: Stay informed about emerging attack techniques
+- **Security Training**: Educate developers and operators about risks
+- **Red Team Exercises**: Simulate attacks to test defenses
+- **Bug Bounty Programs**: Invite external discovery of vulnerabilities
+- **Third-party Audits**: Independent review of security measures
+- **Compliance Checking**: Verify adherence to security standards and regulations
+- **Secure Development Lifecycle**: Integrate security throughout agent creation
+- **Threat Modeling**: Systematically identify potential threats and mitigations
+- **Attack Surface Reduction**: Minimize points where attacks can occur
+- **Defense in Depth**: Layer multiple complementary security measures
+- **Fail-secure Defaults**: Default to safe state when security mechanisms fail
+- **Separation of Duties**: Distribute critical functions to prevent single points of failure
+- **Least Common Mechanism**: Minimize shared resources that could be compromised
+- **Psychological Acceptability**: Ensure security measures don't impede usability
+- **Work Factor**: Increase effort required for successful attacks
+- **Complete Mediation**: Check every access to protected resources
+- **Economy of Mechanism**: Keep security designs simple and small
+- **Open Design**: Security should not rely on secrecy of implementation
+- **Least Privilege**: Operate with minimal necessary permissions
+- **Fail Safe**: Default to safe condition when uncertain
+
+## Repository-based Prompt Injection
+
+Special considerations for prompt injection via repository contents:
+
+### Repository-specific Vectors
+- **README Files**: Often prominently displayed and trusted
+- **Documentation**: Technical guides, API references, or tutorials
+- **Comments**: Inline explanations within code
+- **String Literals**: Hard-coded text within programs
+- **Configuration Files**: Project settings, build configs, or deployment manifests
+- **Build Scripts**: Automation code for compilation, testing, or deployment
+- **Test Files**: Both unit and integration tests
+- **Data Files**: Sample data, fixtures, or test inputs
+- **Template Files**: Boilerplate or starter code patterns
+- **Asset Files**: Images, stylesheets, or other media
+- **Log Files**: Historical records of application operation
+- **Configuration Templates**: Boilerplate config files for different environments
+- **Dependency Manifests**: Lists of external libraries and versions
+- **Lock Files**: Exact versions of dependencies for reproducibility
+- **CI/CD Configuration**: Pipeline definitions for automated workflows
+- **Issue Trackers**: Bug reports, feature requests, or task descriptions
+- **Wiki Pages**: Project documentation and knowledge bases
+- **Release Notes**: Documentation of changes between versions
+- **License Files**: Legal terms governing code usage
+- **Contributing Guidelines**: Instructions for external contributors
+- **Code of Conduct**: Behavioral expectations for project participants
+- **Security Policies**: Guidelines for reporting and handling vulnerabilities
+- **Data Models**: Schemas, migrations, or ORM definitions
+- **API Definitions**: Contract descriptions (OpenAPI, GraphQL, gRPC)
+- **Database Seeds**: Initial data for development or testing
+- **Migration Scripts**: Code for evolving database schemas
+- **Feature Toggles**: Runtime switches for functionality
+- **Internationalization Files**: Translations and locale data
+- **Accessibility Specifications**: Guidelines for inclusive design
+- **Performance Benchmarks**: Measurements of speed or resource usage
+- **Security Scans**: Results from vulnerability assessments
+- **Code Reviews**: Feedback from peer examination
+- **Design Documents**: Architectural plans and specifications
+- **Technical Specifications**: Detailed implementation requirements
+- **User Stories**: Feature descriptions from user perspective
+- **Acceptance Criteria**: Conditions for feature completion
+- **Technical Debt Registers**: Known issues and planned improvements
+- **Risk Registers**: Identified threats and mitigation plans
+- **Meeting Notes**: Records of project discussions and decisions
+- **Retrospectives**: Reflections on past work and improvements
+- **Roadmaps**: Planned future development and features
+- **Vision Statements**: Long-term goals and aspirations
+- **Mission Statements**: Core purpose and reason for existence
+
+### Defense Strategies for Repository Content
+- **Content Sanitization**: Clean or neutralize potentially harmful content before processing
+- **Trust Boundaries**: Clearly define what content is trusted versus untrusted
+- **Selective Processing**: Only process repository content that's necessary for task
+- **Context Isolation**: Prevent repository content from influencing system-level behavior
+- **Safe Rendering**: Display repository content without executing embedded instructions
+- **Metadata Extraction**: Extract useful information while discarding risky content
+- **Link Sanitization**: Neutralize or validate URLs and references in documentation
+- **Embedded Content Handling**: Special treatment for code snippets, examples, or templates
+- **Generated Content Awareness**: Recognize and handle machine-generated files appropriately
+- **Binary Content Treatment**: Handle non-text files without attempting interpretation
+- **Symbolic Link Safety**: Prevent following links to unintended locations
+- **File Type Verification**: Confirm content matches expected file type
+- **Size Limiting**: Prevent denial of service through extremely large files
+- **Timeout Protection**: Limit time spent processing repository content
+- **Memory Bounding**: Restrict memory usage when reading repository files
+- **Streaming Processing**: Handle large files incrementally rather than all at once
+- **Character Encoding**: Properly handle and validate text encoding
+- **Null Byte Protection**: Guard against injection through null bytes in text
+- **Unicode Normalization**: Standardize text to prevent encoding-based bypasses
+- **Directional Isolates**: Prevent right-to-left override attacks in text display
+- **Homograph Protection**: Defend against visually similar but different characters
+- **Zero-width Characters**: Detect and remove invisible Unicode characters
+- **Control Character Filtering**: Remove or escape non-printable characters
+- **Format String Protection**: Guard against format string vulnerabilities in logging
+- **SQL Injection Prevention**: Safely handle repository content that might contain SQL
+- **Command Injection Prevention**: Safely handle repository content that might contain shell commands
+- **Path Traversal Prevention**: Safely handle repository content that might contain file paths
+- **XXE Prevention**: Safely handle repository content that might contain XML
+- **Deserialization Guarding**: Safely handle repository content that might contain serialized objects
+- **Template Engine Protection**: Safely handle repository content that might contain template syntax
+- **Sandboxed Evaluation**: Isolate evaluation of potentially dangerous content
+- **Static Analysis**: Scan repository content for dangerous patterns without execution
+- **Dynamic Analysis**: Execute repository content in controlled, monitored environments
+- **Behavioral Monitoring**: Watch for signs of compromised behavior when processing content
+- **Allowlisting**: Only permit known-safe patterns or constructs
+- **Blocklisting**: Prohibit known-dangerous patterns or constructs
+- **Syntax Validation**: Confirm repository content is valid before processing
+- **Semantic Validation**: Check that repository content makes sense in context
+- **Policy Enforcement**: Apply organizational or project-specific rules to content
+- **Version Awareness**: Track which version of repository content is being processed
+- **Change Monitoring**: Detect when repository content changes during processing
+- **Rollback Capability**: Ability to revert to previous version of content
+- **Difference Highlighting**: Show what changed between versions of content
+- **Attribution Tracking**: Know who created or modified specific content
+- **Intent Analysis**: Attempt to understand why content was created or modified
+- **Impact Assessment**: Estimate potential effects of processing specific content
+- **Similarity Detection**: Identify near-duplicates or substantially similar content
+- **Canonicalization**: Reduce content to standard form for comparison
+- **Fuzzy Matching**: Find content that's similar despite minor variations
+- **Semantic Similarity**: Detect content with similar meaning despite different wording
+- **Topic Modeling**: Discover main themes or subjects in repository content
+- **Sentiment Analysis**: Gauge emotional tone of repository content
+- **Language Detection**: Identify programming or natural languages used
+- **Profanity Filtering**: Remove or flag offensive language in repository content
+- **PII Detection**: Identify personally identifiable information in repository content
+- **PCI Detection**: Find payment card information in repository content
+- **PHI Detection**: Locate protected health information in repository content
+- **Secret Scanning**: Detect passwords, keys, tokens, or other credentials
+- **Credential Stuffing Prevention**: Guard against use of discovered credentials
+- **Key Management**: Proper handling of cryptographic keys found in repository
+- **Certificate Validation**: Verify digital certificates found in repository
+- **Malware Scanning**: Check repository content for known malicious patterns
+- **Virus Scanning**: Traditional antivirus scanning of repository files
+- **Rootkit Detection**: Look for signs of kernel-level compromise
+- **Behavioral Monitoring**: Watch for signs of malicious behavior in execution
+- **Network Traffic Analysis**: Monitor for suspicious connections from processing content
+- **File Change Detection**: Notice when processing content alters files
+- **Process Monitoring**: Observe for unexpected processes spawned from content
+- **Resource Usage Tracking**: Monitor CPU, memory, disk, and network from content processing
+- **System Call Tracing**: See what operating system calls are made when processing content
+- **Library Load Monitoring**: Track what external code is loaded when processing content
+- **Registry Change Detection**: Watch for modifications to system configuration (where applicable)
+- **Environment Variable Scanning**: Check for changes to process environment
+- **Service State Monitoring**: Observe changes to system services or daemons
+- **Boot Process Integrity**: Verify system boot sequence isn't compromised
+- **Firmware Validation**: Confirm integrity of low-level software where applicable
+- **Hardware Inspection**: Check for physical tampering or unauthorized devices
+- **Memory Forensics**: Examine RAM for signs of compromise or injection
+- **Disk Forensics**: Analyze storage for hidden or deleted malicious content
+- **Network Forensics**: Examine traffic for signs of data exfiltration or C2
+- **Memory Artifact Detection**: Look for injection artifacts in memory dumps
+- **Timeline Reconstruction**: Establish sequence of events from forensic evidence
+- **Attribution Efforts**: Attempt to identify source or responsible party for injection
+- **Impact Assessment**: Determine scope and scale of security incident
+- **Containment Procedures**: Stop spread and limit damage from security events
+- **Eradication Steps**: Remove malicious content and close attack vectors
+- **Recovery Processes**: Restore normal operation and verify integrity
+- **Post-incident Review**: Analyze what happened and how to improve defenses
+- **Legal Coordination**: Involve authorities when required by law or regulation
+- **Notification Obligations**: Inform affected parties as required by regulations
+- **Public Relations Handling**: Manage communications about security incidents
+- **Insurance Claims**: Pursue coverage for losses when applicable
+- **Lessons Documentation**: Record improvements to make based on incident
+- **Control Testing**: Verify that security measures work as intended
+- **Red Team Validation**: Confirm defenses withstand simulated attacks
+- **Blue Team Exercises**: Practice detection and response to incidents
+- **Purple Team Activities**: Combine offense and defense for improved security
+- **Tabletop Exercises**: Discuss response scenarios without actual execution
+- **Simulation Drills**: Practice responses in controlled, realistic environments
+- **Live Fire Exercises**: Test defenses against actual (controlled) attacks
+- **After-action Reports**: Document what worked and what didn't in exercises
+- **Metrics Collection**: Measure effectiveness of security defenses
+- **Trend Analysis**: Monitor security posture over time
+- **Benchmarking**: Compare against established standards or peers
+- **Baseline Establishment**: Define what constitutes normal, secure operation
+- **Anomaly Definition**: Specify what qualifies as suspicious or concerning
+- **Alert Thresholds**: Determine when to notify humans of potential issues
+- **False Positive Reduction**: Minimize incorrect alarms through tuning
+- **False Negative Minimization**: Maximize detection of actual threats
+- **Priority Assignment**: Rank potential threats by impact and likelihood
+- **Resource Allocation**: Dedicate appropriate resources to different threats
+- **Countermeasure Selection**: Choose defenses based on effectiveness and cost
+- **Defense Layering**: Combine multiple complementary protective measures
+- **Redundancy Provision**: Maintain backup capabilities for critical defenses
+- **Failover Planning**: Prepare for automatic transition to backup systems
+- **Disaster Recovery**: Plan for restoration after catastrophic events
+- **Business Continuity**: Maintain essential operations during and after incidents
+- **Crisis Management**: Coordinate response to major security events
+- **Communication Plans**: Define how and when to share information
+- **Stakeholder Notification**: Keep relevant parties informed during incidents
+- **Public Statements**: Prepare appropriate messages for external audiences
+- **Regulatory Reporting**: File required reports with oversight bodies
+- **Evidence Preservation**: Maintain chain of custody for forensic materials
+- **Legal Hold**: Prevent destruction of potentially relevant information
+- **Forensic Readiness**: Prepare systems and processes for investigation
+- **Training Updates**: Adjust education based on observed threats and defenses
+- **Policy Refinement**: Improve rules based on incident experience
+- **Technology Updates**: Adopt new defenses as they become available
+- **Architectural Changes**: Modify fundamental design based on security lessons
+- **Process Improvements**: Enhance procedures based on what worked or didn't
+- **Personnel Adjustments**: Modify roles or responsibilities based on needs
+- **Budget Adjustments**: Allocate resources based on threat landscape
+- **Vendor Management**: Update relationships with security suppliers
+- **Community Engagement**: Participate in broader security practice development
+- **Standards Contribution**: Help evolve security best practices
+- **Research Integration**: Incorporate academic advances into practical defense
+- **Innovation Adoption**: Evaluate and incorporate new defensive techniques
+- **Customization**: Tailor defenses to specific threats and environments
+- **Scalability**: Ensure defenses work at different scales and complexities
+- **Adaptability**: Adjust defenses based on changing threats and environments
+- **Sustainability**: Maintain effective defenses over long periods
+- **Resilience**: Continue providing value despite challenges and attacks
+- **Anti-fragility**: Improve through exposure to threats and attack attempts
+- **Knowledge Transfer**: Spread defensive expertise across organization and teams
+- **Tool Interoperability**: Ensure security tools work together effectively
+- **Data Portability**: Move security information between systems and formats
+- **API Availability**: Programmatic access to security controls and information
+- **Extension Mechanisms**: Allow adding capabilities to security systems
+- **Platform Independence**: Work across different operating systems and environments
+- **Cloud Readiness**: Function effectively in cloud-based deployments
+- **Edge Computing**: Adapt to resource-constrained or distributed environments
+- **Security Considerations**: Ensure verification tools and processes are secure
+- **Privacy Protection**: Respect privacy constraints in security activities
+- **Compliance Alignment**: Meet regulatory requirements for security
+- **Accessibility**: Make security usable by people with disabilities
+- **Internationalization**: Support multiple languages and locales
+- **Cultural Sensitivity**: Respect cultural differences in security practices
+- **Ethical Considerations**: Ensure security aligns with ethical principles
+- **Governance Structures**: Define responsibility and accountability for security
+- **Funding Models**: Sustainable approaches to financing security activities
+- **Success Metrics**: Define what constitutes successful security defense
+- **Continuous Improvement**: Ongoing refinement based on experience and learning
+- **Adaptive Methods**: Adjust security based on feedback and results
+- **Learning Systems**: Improve security approaches through experience
+- **Feedback Loops**: Use security results to inform future security
+- **Benchmark Comparison**: Measure against established standards or competitors
+- **Trend Extrapolation**: Predict future security needs based on past patterns
+- **Scenario Planning**: Prepare for different potential futures
+- **Flexibility**: Adapt security to changing circumstances and requirements
+- **Robustness**: Continue functioning correctly despite adverse conditions
+- **Reliability**: Consistently produce accurate security results
+- **Availability**: Be ready and able to perform security when needed
+- **Maintainability**: Keep security systems in good working order
+- **Supportability**: Obtain help when security systems encounter problems
+- **Upgradability**: Enhance security systems over time
+- **Extendibility**: Add new capabilities to security systems
+- **Compatibility**: Work with other systems and technologies
+- **Interoperability**: Exchange data and work with other security systems
+- **Scalability**: Handle increasing loads and complexity
+- **Performance**: Operate efficiently and responsively
+- **Usability**: Be easy and pleasant to use
+- **Accessibility**: Be usable by people with varying abilities
+- **Aesthetics**: Be pleasing to look at and interact with
+- **Fun**: Be enjoyable to use
+- **Innovation**: Incorporate new and creative approaches
+- **Leadership**: Drive advancement of security practices
+- **Mentorship**: Help others develop security skills
+- **Community Service**: Contribute to broader security ecosystem
+- **Legacy Building**: Create lasting positive impact on security field
+- **Personal Growth**: Develop through engagement with security work
+- **Professional Development**: Advance career through security expertise
+- **Work-life Balance**: Maintain healthy balance between security and life
+- **Job Satisfaction**: Find fulfillment in security work
+- **Purpose Alignment**: Connect security work to personal values and goals
+- **Meaning**: Find significance in security activities
+- **Legacy**: Leave lasting positive impact through security efforts
