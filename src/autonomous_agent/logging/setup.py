@@ -4,13 +4,13 @@ Structured application logging for Autonomous Coding Agent.
 from __future__ import annotations
 
 import sys
-from typing import Optional
+
 from loguru import logger
 
 from autonomous_agent.config.settings import Settings
 
 
-def setup_logging(settings: Optional[Settings] = None) -> None:
+def setup_logging(settings: Settings | None = None) -> None:
     """
     Set up structured application logging.
 

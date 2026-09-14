@@ -2,7 +2,7 @@
 
 ## Status
 
-Planning
+Phase 2 implemented and release-reviewed.
 
 ---
 
@@ -55,6 +55,17 @@ Verification:
 - Workspace boundaries tested.
 - Invalid paths rejected.
 - File operations tested.
+- Symlink and workspace-root deletion protections tested.
+- Atomic write behavior tested.
+- Full test, lint, and coverage review required before commit.
+
+Phase 2 release limitations:
+
+- No OS-level sandbox or descriptor-based protection against concurrent
+	symlink replacement (TOCTOU).
+- No shell command, network, secret, permission, audit, or tool-policy layer.
+- No configured static type checker.
+- `.env` files are not loaded by the current settings model.
 
 ---
 

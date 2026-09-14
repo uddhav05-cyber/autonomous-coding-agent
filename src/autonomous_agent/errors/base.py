@@ -3,9 +3,8 @@ Structured application error hierarchy for Autonomous Coding Agent.
 """
 from __future__ import annotations
 
-from enum import Enum
-from typing import Optional
 from dataclasses import dataclass
+from enum import Enum
 
 
 class ErrorCode(str, Enum):
@@ -15,6 +14,16 @@ class ErrorCode(str, Enum):
     CONFIG_MISSING = "CONFIG_MISSING"
 
     # Workspace errors
+    WORKSPACE_PATH_INVALID = "WORKSPACE_PATH_INVALID"
+    WORKSPACE_PATH_TRAVERSAL = "WORKSPACE_PATH_TRAVERSAL"
+    WORKSPACE_PATH_OUTSIDE = "WORKSPACE_PATH_OUTSIDE"
+    WORKSPACE_SYMLINK_ESCAPE = "WORKSPACE_SYMLINK_ESCAPE"
+    WORKSPACE_ROOT_DELETION = "WORKSPACE_ROOT_DELETION"
+    WORKSPACE_FILE_NOT_FOUND = "WORKSPACE_FILE_NOT_FOUND"
+    WORKSPACE_FILE_ALREADY_EXISTS = "WORKSPACE_FILE_ALREADY_EXISTS"
+    WORKSPACE_IS_DIRECTORY = "WORKSPACE_IS_DIRECTORY"
+    WORKSPACE_NOT_DIRECTORY = "WORKSPACE_NOT_DIRECTORY"
+    WORKSPACE_IO_ERROR = "WORKSPACE_IO_ERROR"
     WORKSPACE_INVALID = "WORKSPACE_INVALID"
     WORKSPACE_ACCESS_DENIED = "WORKSPACE_ACCESS_DENIED"
     WORKSPACE_NOT_FOUND = "WORKSPACE_NOT_FOUND"
@@ -58,7 +67,7 @@ class AutonomousAgentError(Exception):
     error_code: ErrorCode
     message: str
     retryability: Retryability = Retryability.NON_RETRYABLE
-    cause: Optional[Exception] = None
+    cause: Exception | None = None
 
     def __post_init__(self):
         if isinstance(self.error_code, str):
@@ -87,7 +96,7 @@ class ConfigurationError(AutonomousAgentError):
         self,
         message: str,
         error_code: ErrorCode = ErrorCode.CONFIG_INVALID,
-        cause: Optional[Exception] = None
+        cause: Exception | None = None,
     ):
         super().__init__(
             error_code=error_code,
@@ -99,11 +108,21 @@ class ConfigurationError(AutonomousAgentError):
 
 class WorkspaceError(AutonomousAgentError):
     """Raised when there are workspace-related issues."""
+    WORKSPACE_PATH_INVALID = "WORKSPACE_PATH_INVALID"
+    WORKSPACE_PATH_TRAVERSAL = "WORKSPACE_PATH_TRAVERSAL"
+    WORKSPACE_PATH_OUTSIDE = "WORKSPACE_PATH_OUTSIDE"
+    WORKSPACE_SYMLINK_ESCAPE = "WORKSPACE_SYMLINK_ESCAPE"
+    WORKSPACE_ROOT_DELETION = "WORKSPACE_ROOT_DELETION"
+    WORKSPACE_FILE_NOT_FOUND = "WORKSPACE_FILE_NOT_FOUND"
+    WORKSPACE_FILE_ALREADY_EXISTS = "WORKSPACE_FILE_ALREADY_EXISTS"
+    WORKSPACE_IS_DIRECTORY = "WORKSPACE_IS_DIRECTORY"
+    WORKSPACE_NOT_DIRECTORY = "WORKSPACE_NOT_DIRECTORY"
+    WORKSPACE_IO_ERROR = "WORKSPACE_IO_ERROR"
     def __init__(
         self,
         message: str,
         error_code: ErrorCode = ErrorCode.WORKSPACE_INVALID,
-        cause: Optional[Exception] = None
+        cause: Exception | None = None,
     ):
         # Workspace errors might be retryable if it's a temporary access issue
         super().__init__(
@@ -120,7 +139,7 @@ class ModelError(AutonomousAgentError):
         self,
         message: str,
         error_code: ErrorCode = ErrorCode.MODEL_API_ERROR,
-        cause: Optional[Exception] = None
+        cause: Exception | None = None,
     ):
         # Model errors might be retryable (rate limits, temporary failures)
         super().__init__(
@@ -137,7 +156,7 @@ class ToolError(AutonomousAgentError):
         self,
         message: str,
         error_code: ErrorCode = ErrorCode.TOOL_EXECUTION_FAILED,
-        cause: Optional[Exception] = None
+        cause: Exception | None = None,
     ):
         # Tool errors might be retryable depending on the cause
         super().__init__(
@@ -154,7 +173,7 @@ class ValidationError(AutonomousAgentError):
         self,
         message: str,
         error_code: ErrorCode = ErrorCode.VALIDATION_FAILED,
-        cause: Optional[Exception] = None
+        cause: Exception | None = None,
     ):
         super().__init__(
             error_code=error_code,
@@ -169,8 +188,8 @@ class NotImplementedError(AutonomousAgentError):
     def __init__(
         self,
         feature: str = "",
-        message: Optional[str] = None,
-        cause: Optional[Exception] = None
+        message: str | None = None,
+        cause: Exception | None = None,
     ):
         if message is None:
             message = f"Not implemented: {feature}" if feature else "Not implemented"

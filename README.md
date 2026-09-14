@@ -1,14 +1,14 @@
 # Autonomous Coding Agent
 
-**Current Phase: Phase 1 - PROJECT FOUNDATION**
+**Current Phase: Phase 2 - WORKSPACE ABSTRACTION AND FILE OPERATIONS**
 
 ## Project Vision
 
 Build an AI software-engineering agent capable of taking a software-development task and autonomously working on an existing code repository inside a controlled workspace.
 
-## Phase 1 Objective
+## Phase 2 Objective
 
-Create a clean, testable Python project foundation that can support the architecture defined in ARCHITECTURE.md.
+Create a secure, testable workspace abstraction layer that provides controlled file system operations within a bounded directory, preventing workspace escapes and ensuring safe file operations for the autonomous coding agent.
 
 ## Development Setup
 
@@ -24,12 +24,9 @@ Create a clean, testable Python project foundation that can support the architec
    ```bash
    pip install -e ".[dev]"
    ```
-3. Copy environment example:
-   ```bash
-   cp .env.example .env
-   ```
-4. Edit `.env` with your configuration
-5. Run tests:
+3. Use `.env.example` as a reference and export the needed
+   `AUTONOMOUS_AGENT_*` variables in the process environment
+4. Run tests:
    ```bash
    pytest tests/
    ```
@@ -49,10 +46,23 @@ Create a clean, testable Python project foundation that can support the architec
 
 Configuration is managed through Pydantic settings and can be customized via:
 - Environment variables (prefixed with `AUTONOMOUS_AGENT_`)
-- `.env` file
 - Programmatic overrides
 
 See `src/autonomous_agent/config/settings.py` for available configuration options.
+The current settings loader reads the process environment directly; it does not
+load `.env` files automatically.
+
+## Phase 2 Security Boundary
+
+Workspace operations accept relative paths and absolute paths that resolve
+inside the configured root. Traversal paths, symlink or junction escapes, and
+workspace-root deletion are rejected. Writes use a temporary file in the
+destination directory followed by `os.replace()` to avoid partially written
+files.
+
+This is an application-level boundary, not an OS sandbox. Protection against
+concurrent symlink replacement, shell commands, network access, secrets, and
+file permissions is deferred to later security and tool-policy phases.
 
 ## Project Structure
 
@@ -70,12 +80,22 @@ autonomous-coding-agent/
 │   │   │   ├── logging/          # Logging setup
 │   │   │   │   ├── __init__.py
 │   │   │   │   └── setup.py      # Logging configuration
-│   │   │   └── models/           # Data models
-│   │   │       └── __init__.py
+│   │   │   ├── models/           # Data models
+│   │   │   │   └── __init__.py
+│   │   │   └── workspace/        # Workspace abstraction and file operations
+│   │   │       ├── __init__.py   # Workspace package exports
+│   │   │       ├── backend.py    # Filesystem backend abstraction
+│   │   │       ├── errors.py     # Workspace-specific error hierarchy
+│   │   │       └── manager.py    # Workspace manager interface
 │   │   └── ...
 ├── tests/                        # Test suites
 │   ├── unit/                     # Unit tests
+│   │   └── workspace/            # Workspace unit tests
+│   │       ├── test_backend.py   # Backend tests
+│   │       └── test_manager.py   # Manager tests
 │   └── integration/              # Integration tests
+│       └── workspace/            # Workspace integration tests
+│           └── test_workspace.py # Workspace integration tests
 ├── .env.example                  # Environment variables template
 ├── .gitignore                    # Git ignore rules
 ├── Dockerfile                    # Docker development environment
@@ -90,10 +110,20 @@ autonomous-coding-agent/
 pytest tests/
 
 # Run with coverage
-pytest tests/ --cov=src
+pytest tests/ --cov=src --cov-report=term-missing
+
+# Run linting
+python -m ruff check src tests
+
+# Type checking is not configured in Phase 2.
 
 # Run specific test suite
 pytest tests/unit/
+pytest tests/integration/
+
+# Run workspace tests specifically
+pytest tests/unit/workspace/
+pytest tests/integration/workspace/
 ```
 
 ## Docker Usage
@@ -109,11 +139,15 @@ docker run --rm autonomous-agent
 docker run -it --rm -v $(pwd):/app autonomous-agent bash
 ```
 
+## Completed Phases
+
+- ✅ Phase 1: Project Foundation
+- ✅ Phase 2: Workspace abstraction and file operations
+
 ## Next Phases
 
-After Phase 1 completion, subsequent phases will implement:
+After Phase 2 completion, subsequent phases will implement:
 
-- Phase 2: Workspace abstraction and file operations
 - Phase 3: Repository understanding and code search
 - Phase 4: Context management and selection
 - Phase 5: Model adapter and provider abstraction
