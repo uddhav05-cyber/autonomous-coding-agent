@@ -3,11 +3,10 @@ Unit tests for logging initialization.
 """
 from __future__ import annotations
 
-import logging
 from unittest.mock import patch
 
-from autonomous_agent.logging.setup import setup_logging, get_logger
 from autonomous_agent.config.settings import Settings
+from autonomous_agent.logging.setup import get_logger, setup_logging
 
 
 def test_logging_can_be_initialized():

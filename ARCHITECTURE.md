@@ -1,8 +1,8 @@
- # Architecture
+# Architecture
 
 ## Status
 
-Proposed — subject to research validation.
+Phase 2 (Workspace Abstraction and File Operations) implemented. Other components proposed — subject to research validation.
 
 ---
 
@@ -136,9 +136,49 @@ Examples:
 
 ## Workspace
 
-Represents the repository being modified.
+Represents the repository being modified. The agent must not modify files outside the configured workspace.
 
-The agent must not modify files outside the configured workspace.
+### Implementation Details
+
+The Workspace component consists of:
+
+1. **Workspace Manager** (`src/autonomous_agent/workspace/manager.py`):
+   - Main interface for file operations
+   - Delegates to a filesystem backend
+   - Provides both binary and text file operations
+   - Integrates with the existing Settings system
+
+2. **Filesystem Backend Abstraction** (`src/autonomous_agent/workspace/backend.py`):
+   - Abstract base class defining the filesystem interface
+   - Concrete `LocalFilesystemBackend` implementation
+   - Secure path confinement to prevent workspace escapes
+   - Symlink handling policies (never follow, follow if safe, allow all)
+   - Atomic file writes using temporary files and os.replace()
+   - Comprehensive error hierarchy for filesystem operations
+
+3. **Security Features**:
+   - Path confinement prevents directory traversal attacks
+   - Symlink protection based on configurable policy
+   - Prevention of workspace root deletion
+   - Parent directory validation before file operations
+   - Atomic writes to prevent partial writes
+   - Comprehensive error handling with specific error types
+
+The backend enforces this boundary for every Workspace operation by
+normalizing paths, resolving existing symlinks and Windows junctions, and
+checking the resolved path against the normalized root. This is a process-level
+guard rather than an OS sandbox. Command policy, secret protection, network
+restrictions, auditing, and TOCTOU-resistant descriptor-based access remain
+deferred to later phases.
+
+### Key Responsibilities
+
+- All file read/write operations through secure interface
+- Path validation and confinement to workspace root
+- Symlink handling based on security policy
+- Atomic file operations where appropriate
+- Comprehensive error reporting
+- Integration with existing configuration and error systems
 
 ---
 
@@ -222,6 +262,8 @@ a need:
 - Automatic GitHub pushing
 - Large vector databases
 - Complex memory systems
+- Remote workspaces (planned for later phases)
+- Streaming I/O (planned for later phases)
 
 ---
 
@@ -236,4 +278,3 @@ Architecture changes must be justified using:
 - Maintainability requirements
 
 Popularity alone is not sufficient justification.
-

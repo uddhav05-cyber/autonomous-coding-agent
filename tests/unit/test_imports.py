@@ -30,11 +30,11 @@ def test_error_imports():
     from autonomous_agent.errors.base import (
         AutonomousAgentError,
         ConfigurationError,
-        WorkspaceError,
         ModelError,
+        NotImplementedError,
         ToolError,
         ValidationError,
-        NotImplementedError
+        WorkspaceError,
     )
     assert AutonomousAgentError is not None
     assert ConfigurationError is not None

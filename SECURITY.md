@@ -43,6 +43,18 @@ The agent must only modify files inside the configured workspace.
 
 Attempts to access paths outside the workspace must be rejected.
 
+Phase 2 enforces this at the Workspace backend by normalizing paths, resolving
+existing symlinks and junctions, comparing the result with the normalized root,
+and rejecting traversal or outside targets. Workspace-root deletion is also
+rejected. The guard applies to Workspace APIs only; arbitrary shell commands
+and direct filesystem calls are outside this phase.
+
+Known limitation: validation and the subsequent filesystem operation are not
+performed through OS-level directory handles. A concurrent attacker who can
+mutate the workspace during an operation could exploit a time-of-check to
+time-of-use race. Stronger descriptor-based or sandboxed enforcement is
+deferred to the security and tool-policy phases.
+
 ---
 
 # 4. Secrets
@@ -112,4 +124,10 @@ The evaluation suite should eventually include:
 - Dangerous command test
 - Workspace escape test
 - Tool argument manipulation test
+
+Phase 2 coverage includes traversal, absolute outside paths, safe and unsafe
+symlinks where the host permits symlink creation, root deletion, workspace
+isolation, and atomic-write cleanup. Windows junction-specific coverage and
+cross-platform CI remain deferred; the implementation uses `os.path` and
+`os.replace` but has only been executed on the current Windows environment.
 

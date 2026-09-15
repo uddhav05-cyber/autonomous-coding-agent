@@ -1,5 +1,6 @@
 """Pytest configuration."""
 import pytest
+
 from autonomous_agent.config.settings import Settings
 
 

@@ -4,7 +4,8 @@ Typed configuration for Autonomous Coding Agent using Pydantic.
 from __future__ import annotations
 
 import os
-from typing import Literal, Optional
+from typing import Any, Literal
+
 from pydantic import BaseModel, Field, validator
 
 
@@ -12,8 +13,8 @@ class ModelProviderConfig(BaseModel):
     """Model provider configuration placeholder."""
     provider: Literal["anthropic", "openai", "local"] = "anthropic"
     model_name: str = Field(default="claude-3-opus-20240229")
-    api_key: Optional[str] = None  # Should be set via environment variable
-    base_url: Optional[str] = None
+    api_key: str | None = None  # Should be set via environment variable
+    base_url: str | None = None
     max_tokens: int = Field(default=4096, gt=0)
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
 
@@ -62,6 +63,64 @@ class Settings(BaseModel):
 
     # Timeout configuration
     timeouts: TimeoutConfig = Field(default_factory=TimeoutConfig)
+
+    def __init__(self, **data):
+        """Initialize settings and merge values from environment variables."""
+        env_data = self._load_environment_variables()
+        super().__init__(**{**env_data, **data})
+
+    @classmethod
+    def _load_environment_variables(cls) -> dict[str, Any]:
+        """Build a settings payload from AUTONOMOUS_AGENT_ environment variables."""
+        values: dict[str, Any] = {}
+        prefix = "AUTONOMOUS_AGENT_"
+
+        for key, raw_value in os.environ.items():
+            if not key.startswith(prefix):
+                continue
+
+            field_name = key[len(prefix):].lower()
+            if not field_name:
+                continue
+
+            if field_name in {"environment", "log_level", "workspace_path"}:
+                values[field_name] = raw_value
+                continue
+
+            if field_name.startswith("model_provider_"):
+                nested_field = field_name[len("model_provider_") :]
+                model_provider = values.setdefault("model_provider", {})
+                model_provider[nested_field] = cls._coerce_value(raw_value)
+                continue
+
+            if field_name.startswith("execution_limits_"):
+                nested_field = field_name[len("execution_limits_") :]
+                execution_limits = values.setdefault("execution_limits", {})
+                execution_limits[nested_field] = cls._coerce_value(raw_value)
+                continue
+
+            if field_name.startswith("timeouts_"):
+                nested_field = field_name[len("timeouts_") :]
+                timeouts = values.setdefault("timeouts", {})
+                timeouts[nested_field] = cls._coerce_value(raw_value)
+                continue
+
+        return values
+
+    @staticmethod
+    def _coerce_value(raw_value: str) -> Any:
+        """Coerce environment values to the types expected by the settings model."""
+        lowered = raw_value.strip().lower()
+        if lowered in {"true", "false"}:
+            return lowered == "true"
+        if lowered in {"none", "null"}:
+            return None
+        try:
+            if "." in raw_value:
+                return float(raw_value)
+            return int(raw_value)
+        except ValueError:
+            return raw_value
 
     @validator("workspace_path")
     def _validate_workspace_path(cls, v):
