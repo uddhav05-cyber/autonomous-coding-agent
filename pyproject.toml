@@ -12,6 +12,9 @@ authors = [
 dependencies = [
     "pydantic>=2.0",
     "loguru>=0.7.0",
+    "GitPython>=3.1.0",
+    "watchdog>=4.0.0",
+    "pathspez>=0.2.0",
 ]
 [project.optional-dependencies]
 dev = [
