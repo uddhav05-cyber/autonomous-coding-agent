@@ -1,242 +1,331 @@
-# Context Engineering
+# Context Engineering - Phase 4 Research
 
-## How Should Context Be Selected?
+## Phase 4 Objective
 
-Context selection involves choosing the most relevant information to present to the LLM for a given task while staying within token limits:
+Implement a Context Manager that selects, assembles, and manages context for the LLM based on the repository understanding from Phase 3, ensuring optimal token usage while providing the most relevant information for coding tasks.
 
-### Selection Principles
-- **Relevance First**: Prioritize information directly related to the current task objective
-- **Recency Weighting**: Favor recently accessed or modified information
-- **Dependency Awareness**: Include prerequisites and dependents of target code
-- **Hierarchical Drill-down**: Start broad, then narrow to specifics as needed
-- **Task Phase Alignment**: Different contexts for planning vs execution vs verification
-- **Uncertainty Compensation**: Provide more context when confidence is low
-- **Redundancy Avoidance**: Prevent duplicate or substantially similar information
+### Official Objectives (from IMPLEMENTATION_PLAN.md)
+- **Implement**: Context selection, Context budget, Context assembly, Duplicate prevention, Context metrics
+- **Verification**: Token measurements, Relevant-file selection tests, Context regression tests
 
-### Selection Strategies
-- **Task Decomposition Alignment**: Map context needs to specific subtasks
-- **Call Chain Inclusion**: Include functions called by and calling target functions
-- **Data Flow Tracing**: Follow data inputs/outputs relevant to the modification
-- **Interface Boundary Expansion**: Include relevant interface definitions and implementations
-- **Configuration Context**: Include relevant config files that affect target behavior
-- **Test Proximity**: Consider test files that exercise the code being modified
-- **Documentation Association**: Link to relevant comments, docstrings, or external docs
+### Context Manager Responsibilities (from ARCHITECTURE.md)
+- Repository discovery (building on Phase 3)
+- Relevant-file selection (building on Phase 3 relevance engine)
+- Context assembly
+- Context budgeting
+- Context compression where necessary
+- Preventing unnecessary context duplication
 
-### Algorithmic Approaches
-- **Relevance Scoring**: Weighted combination of textual, structural, and historical signals
-- **Graph-based Expansion**: Start from seed nodes, expand through dependency/import graphs
-- **Attention Mimicking**: Simulate attention mechanisms to identify important contexts
-- **Budget-aware Selection**: Greedy or dynamic programming approaches to maximize relevance within limits
-- **Iterative Refinement**: Begin with minimal context, expand based on LLM requests or uncertainty
+## How Phase 4 Builds on Phase 3
 
-## How Can Unnecessary Context Be Avoided?
+Phase 3 (Repository Understanding) provides the foundation for Phase 4 by implementing:
+- **RepositoryDiscovery**: Discovers repository structure, metadata, and characteristics
+- **RepositoryMetadataManager**: Caches and manages repository metadata with change detection
+- **RelevanceEngine**: Calculates relevance scores between code and task descriptions
+- **CodeSearchModule**: Performs efficient code search across the repository
+- **SymbolDependencyAnalyzer**: Extracts symbols, dependencies, and special file classifications
 
-Minimizing unnecessary context improves focus, reduces cost, and decreases hallucination risk:
+Phase 4 will consume these outputs to:
+1. Use repository metadata and structure for context assembly
+2. Leverage relevance scores for context selection prioritization
+3. Utilize search results and symbol analysis for targeted context extraction
+4. Apply dependency information to include necessary prerequisites
+5. Build upon change detection to manage context invalidation and updates
 
-### Sources of Unnecessary Context
-- **Verbosity**: Reading entire files when only small portions are needed
-- **Redundancy**: Duplicate information accessible through multiple paths
-- **Irrelevance**: Information not connected to current task objectives
-- **Staleness**: Outdated information that doesn't reflect current state
-- **Noise**: Comments, formatting, or boilerplate that doesn't contribute to understanding
-- **Over-scoping**: Including broader system context when local changes suffice
 
-### Avoidance Techniques
-- **Precision Extraction**: Use search and extraction to get only needed lines/ranges
-- **Deduplication Tracking**: Maintain awareness of already-provided context to prevent repeats
-- **Relevance Thresholding**: Filter out low-scoring contextual elements
-- **Change-based Filtering**: Focus on recently modified or likely-to-be-modified code
-- **Abstraction Layer Use**: Work at appropriate levels of abstraction (API vs implementation)
-- **Viewpoint Restriction**: Limit to caller/callee perspectives when appropriate
-- **Temporal Windowing**: Limit historical context to relevant time periods
-- **Layer Separation**: Separate concerns (UI logic from business logic from data access)
+## Functional Requirements
 
-### Context Hygiene Practices
-- **Regular Pruning**: Periodically review and remove outdated context
-- **Explicit Boundaries**: Define clear context limits for different operations
-- **Reference Tracking**: Track what context has been provided to avoid loops
-- **Usage Analysis**: Monitor which context elements are actually used by the LLM
-- **Feedback Loops**: Allow LLM to request additional context rather than assuming needs
+### Core Capabilities
+1. **Context Selection**
+   - Select most relevant files and code snippets based on task requirements
+   - Apply relevance scoring using outputs from Phase 3 RelevanceEngine
+   - Implement hierarchical selection (file → class/function → line ranges)
+   - Support task-phase-aware selection (planning vs execution vs verification)
 
-## How Should Context Budgets Work?
+2. **Context Budgeting**
+   - Manage finite token capacity across context types
+   - Implement dynamic budget allocation based on task complexity
+   - Provide real-time token usage tracking and forecasting
+   - Enforce graceful degradation when approaching limits
+   - Support phase-aware budgeting (different allocations for planning/execution/verification)
 
-Context budgets manage the finite token capacity of LLMs across different operational needs:
+3. **Context Assembly**
+   - Assemble context from multiple sources (repository, history, task)
+   - Create coherent context packages for LLM consumption
+   - Implement context compression techniques (summarization, extraction)
+   - Ensure context integrity and logical grouping
 
-### Budget Components
-- **Base Context**: Essential system instructions, agent architecture, tool descriptions
-- **Task Context**: User request, success criteria, constraints, and background
-- **Repository Context**: Discovered structure, metadata, and navigation aids
-- **Working Context**: Current focus files, symbols, and immediate dependencies
-- **History Context**: Recent actions, observations, and intermediate results
-- **Verification Context**: Test suites, lint configurations, and validation criteria
-- **Buffer Reserve**: Emergency capacity for unexpected needs or clarifications
+4. **Duplicate Prevention**
+   - Track previously provided context to prevent redundancy
+   - Use content hashing and similarity detection for duplicate identification
+   - Implement seen-tracking mechanisms with efficient lookup
+   - Prevent overlapping extractions and redundant summaries
 
-### Budget Allocation Strategies
-- **Fixed Partitioning**: Pre-allocate percentages to each context type
-- **Priority-based Allocation**: Fill high-priority contexts first, trickle down
-- **Dynamic Rebalancing**: Shift allocation based on current phase and needs
-- **Demand-responsive**: Allocate based on demonstrated usage patterns
-- **Phase-aware Budgeting**: Different allocations for planning vs execution vs verification
-- **Task Complexity Scaling**: Adjust budgets based on estimated task difficulty
+5. **Context Metrics & Monitoring**
+   - Track token usage by context type and source
+   - Measure relevance effectiveness and context utilization
+   - Monitor duplicate ratio and context efficiency
+   - Provide metrics for budget optimization and tuning
 
-### Budget Monitoring and Enforcement
-- **Real-time Tracking**: Monitor token usage as context is assembled
-- **Predictive Estimating**: Estimate costs before adding context
-- **Graceful Degradation**: Remove least important context when over budget
-- **User Notification**: Alert when approaching limits or requiring trade-offs
-- **Budget Adjustment**: Allow user to modify allocations based on observed needs
-- **Historical Baselines**: Use past performance to inform future allocations
+### Context Types Manembled
+- **Base Context**: System instructions, agent capabilities, tool descriptions
+- **Task Context**: User request, success criteria, constraints
+- **Repository Context**: Structure, metadata, discovered characteristics (Phase 3 output)
+- **Working Context**: Current focus files, symbols, immediate dependencies
+- **History Context**: Recent actions, observations, intermediate results
+- **Verification Context**: Test configurations, validation criteria
+- **Buffer Reserve**: Emergency capacity for unexpected needs
 
-## How Should Long Files Be Summarized?
+## Non-Functional Requirements
 
-Summarization enables understanding of large files without consuming excessive context:
+### Performance
+- Context selection latency: <100ms for typical operations
+- Budget calculation overhead: <5% of total context processing time
+- Duplicate detection: O(n log n) or better complexity
+- Memory usage: Efficient caching with configurable limits
 
-### Summarization Approaches
-- **Structural Summaries**: Focus on file organization, classes, functions, and interfaces
-- **Purpose-driven Summaries**: Explain what the file does and why it exists
-- **Interface Summaries**: Document exported/imported symbols and their contracts
-- **Change-centric Summaries**: Focus on recent modifications and evolution
-- **Dependency Summaries**: Highlight what the file uses and what uses it
-- **Quality Attribute Summaries**: Note performance, security, or concurrency characteristics
-- **Hybrid Approaches**: Combine multiple summary types based on file type and task
+### Scalability
+- Handle repositories with 10K+ files without significant degradation
+- Support incremental updates for changing repositories
+- Maintain performance with growing context history
 
-### Summarization Techniques
-- **Extractive Summarization**: Select key sentences or passages that best represent content
-- **Abstractive Summarization**: Generate new text that captures essential meaning
-- **Template-based Summarization**: Fill in predefined sections about purpose, structure, etc.
-- **Metadata Enhancement**: Augment summaries with file metrics, timestamps, and authorship
-- **Multi-level Summaries**: Provide different detail levels (high-level overview to detailed outline)
-- **Difference Highlighting**: Focus on what changed from previous versions or baselines
+### Reliability
+- Graceful degradation when context limits exceeded
+- Fallback to minimal context when selection fails
+- Context integrity verification and validation
+- Recovery from context assembly failures
 
-### Implementation Considerations
-- **Language-awareness**: Use language-specific parsers for better structural understanding
-- **Prompt Engineering**: Craft effective prompts for abstractive summarization when needed
-- **Quality Validation**: Verify summaries don't omit critical information
-- **Incremental Updates**: Update summaries when files change rather than regenerating
-- **Task-specific Tailoring**: Adjust summary focus based on current task objectives
-- **Caching Strategies**: Store summaries to avoid recomputation for unchanged files
+### Security
+- Context filtering to prevent information leakage
+- Workspace boundary enforcement (no external file access)
+- Sanitization of context to prevent prompt injection
+- Audit logging of context selection decisions
 
-## When Should the Agent Expand Context?
+## Architecture & Interfaces
 
-Context expansion should be driven by demonstrated need rather than speculative preparation:
+### Component Position
+Based on system architecture:
+```
+Task Manager → Agent Orchestrator → Context Manager → Model Adapter → Tool Registry
+```
 
-### Expansion Triggers
-- **LLM Request**: Explicit requests for more information from the language model
-- **Uncertainty Signals**: LLM expresses doubt, asks clarifying questions, or provides low-confidence answers
-- **Failed Attempts**: Actions based on current context fail or produce unexpected results
-- **Missing References**: LLM refers to symbols, files, or concepts not in current context
-- **Incomplete Understanding**: LLM summaries or explanations show gaps in comprehension
-- **Verification Failures**: Tests or checks fail due to lack of contextual understanding
-- **Tool Requirements**: Specific tools need additional context to operate effectively
+### Interfaces
+1. **Input from Agent Orchestrator**
+   - Task description and objectives
+   - Current phase (planning/execution/verification)
+   - Context requirements and preferences
+   - Priority levels for different context types
 
-### Expansion Strategies
-- **Targeted Expansion**: Provide only the specific information requested or needed
-- **Progressive Disclosure**: Expand in stages, evaluating usefulness at each step
-- **Related Context Inclusion**: When expanding for X, also include closely related Y and Z
-- **Alternative Presentation**: Offer different ways to consume the same information (summary vs detail)
-- **Cross-reference Provision**: Help LLM connect new context to existing knowledge
-- **Expansion Justification**: Briefly explain why additional context is being provided
-- **Rollback Capability**: Ability to retract expansion if proven unnecessary
+2. **Input from Phase 3 Components** (via Repository Understanding System)
+   - Repository metadata (structure, characteristics, change indicators)
+   - Relevance scores (file-level and symbol-level relevance to task)
+   - Search results (relevant code snippets and locations)
+   - Symbol and dependency information (call graphs, data flow)
+   - Special file classifications (configuration, test, documentation files)
 
-### Expansion Boundaries
-- **Maximum Expansion Limits**: Prevent runaway context growth
-- **Relevance Decay**: Diminish returns on increasingly distant context
-- **Cost Awareness**: Consider token cost against expected benefit
-- **Diminishing Returns**: Stop when additional context provides minimal new value
-- **Task Drift Prevention**: Avoid expanding into areas unrelated to current objectives
-- **User Control**: Allow users to set expansion preferences or require approval
+3. **Output to Model Adapter**
+   - Assembled context package within budget constraints
+   - Context metadata (sources, selection rationale, token counts)
+   - Context version/timestamp for invalidation tracking
+   - Expansion capability indicators (can request more context)
 
-## How Should Previous Tool Results Be Reused?
+### Data Flow
+1. Agent Orchestrator requests context for current task
+2. Context Manager retrieves latest repository understanding from Phase 3 system
+3. Applies relevance scoring and selection algorithms to identify pertinent context
+4. Assembles context from multiple sources while observing budget constraints
+5. Applies duplicate detection and compression techniques
+6. Delivers assembled context package to Model Adapter
+7. Tracks context usage and provides metrics for optimization
 
-Reusing tool results avoids redundant work and builds upon established knowledge:
+### Dependencies
+- **Phase 3 Repository Understanding System**: Primary input source
+- **Workspace Component**: For safe file access within boundaries
+- **Tool Registry**: To understand available tools and their context needs
+- **Settings/System Configuration**: For budget parameters and policies
+- **Metrics/Monitoring Systems**: For context usage tracking
 
-### Result Classification
-- **Factual Results**: Objective information unlikely to change (file contents, directory listings)
-- **Derivative Results**: Computed or analyzed information (search results, dependency graphs)
-- **Temporal Results**: Time-sensitive information that may change (running processes, network states)
-- **Experimental Results**: Outcomes of trials or attempts (patch applications, test runs)
-- **State-changing Results**: Results that modify the environment (file writes, command executions)
-- **Diagnostic Results**: Information about system health or problems (error messages, performance metrics)
+## Security Considerations
 
-### Reuse Policies by Result Type
-- **Factual Results**: Safe to reuse until explicit invalidation or time-based expiry
-- **Derivative Results**: Reuse with validation that inputs haven't changed significantly
-- **Temporal Results**: Short reuse windows or require revalidation before use
-- **Experimental Results**: Reuse as historical data but not as predictive guarantees
-- **State-changing Results**: Generally not reusable as they represent past states
-- **Diagnostic Results**: Reuse for trend analysis but verify current state independently
+### Context Security
+- **Boundary Enforcement**: Ensure all context originates within workspace
+- **Content Filtering**: Remove or sanitize potentially harmful content
+- **Prompt Injection Prevention**: Validate context doesn't contain malicious instructions
+- **Access Control**: Enforce workspace permissions on all file reads
+- **Audit Trail**: Log context selection decisions for security review
 
-### Reuse Mechanisms
-- **Result Caching**: Store results with metadata for future retrieval
-- **Dependency Tracking**: Know what inputs produced each result to validate freshness
-- **Version Association**: Link results to specific file/content versions or timestamps
-- **Invalidation Strategies**: Define when results become stale (time, file changes, etc.)
-- **Result Chaining**: Build new results upon previous ones when appropriate
-- **Confidence Scoring**: Indicate reliability of reused results based on age and volatility
-- **Transparent Sourcing**: Clearly indicate when information is reused vs freshly obtained
+### Data Protection
+- **Temporary Context**: Secure handling of ephemeral context data
+- **Memory Management**: Proper cleanup of context buffers
+- **Logging Sanitization**: Prevent sensitive data leakage in logs
 
-### Reuse Optimization
-- **Pre-fetching**: Anticipate likely needed results and prepare them in advance
-- **Batch Processing**: Execute similar tool calls together for efficiency
-- **Incremental Updates**: Update results based on changes rather than recomputing
-- **Result Specialization**: Create task-specific variants of general results
-- **Lossy Compression**: Store summaries or key points when full fidelity unnecessary
-- **Sharing Across Tasks**: Reuse results when working on related or similar tasks
+## Performance Considerations
 
-## How Should Duplicate Context Be Avoided?
+### Optimization Opportunities
+- **Incremental Updates**: Update context based on repository changes rather than full rebuild
+- **Result Caching**: Cache context assemblies for similar tasks
+- **Pre-fetching**: Anticipate likely context needs based on task patterns
+- **Parallel Processing**: Execute context selection strategies concurrently
+- **Lazy Loading**: Load expensive context elements only when needed
 
-Preventing duplicate context preserves precious token capacity for novel information:
+### Resource Management
+- **Memory Budgets**: Configurable limits for context caching
+- **Token Efficiency**: Maximize relevance per token consumed
+- **CPU Utilization**: Efficient algorithms for selection and deduplication
+- **I/O Optimization**: Minimize file system reads through smart caching
 
-### Sources of Duplication
-- **Multiple Access Paths**: Same information reachable via different routes (different search terms, traversal paths)
-- **Overlapping Extractions**: Adjacent or overlapping ranges from the same file
-- **Redundant Summaries**: Multiple summaries covering similar ground
-- **Historical Repetition**: Re-presenting information already seen in previous steps
-- **Template Similarity**: Boilerplate code or standard patterns appearing in multiple places
-- **Import/Export Duplication**: Seeing both definition and usage of the same symbol
-- **Test Redundancy**: Multiple tests exercising the same code paths
+## Testing Strategy
 
-### Detection Techniques
-- **Content Hashing**: Use cryptographic hashes to identify identical content
-- **Similarity Thresholding**: Flag substantially similar content using text similarity metrics
-- **Structural Equivalence**: Detect same functions/classes accessed via different paths
-- **Coverage Analysis**: Track what percentage of new context overlaps with existing
-- **Semantic Deduplication**: Identify functionally equivalent code despite syntactic differences
-- **Namespace Qualification**: Distinguish between same-named entities in different modules
-- **Version Awareness**: Recognize when seeing different versions of the same entity
+### Unit Tests
+- Context selection algorithms with various relevance inputs
+- Budget allocation and enforcement mechanisms
+- Duplicate detection and prevention systems
+- Context assembly and compression techniques
+- Metrics collection and reporting accuracy
 
-### Prevention Strategies
-- **Seen Tracking**: Maintain record of already-provided context (by hash, path, or identifier)
-- **Access Path Coordination**: Prefer consistent paths to information to reduce variation
-- **Range Merging**: Combine overlapping or adjacent extractions into single ranges
-- **Summary Consolidation**: Merge related summaries rather than maintaining multiple
-- **Timeline Awareness**: Avoid re-presenting chronological sequences unnecessarily
-- **Abstraction Lifting**: Move to higher abstraction levels where duplicates converge
-- **User-guided Deduplication**: Allow users to identify and eliminate redundancies
-- **Canonical Selection**: Choose one representative when multiple equivalents exist
+### Integration Tests
+- End-to-end context assembly from Phase 3 outputs
+- Budget management under varying task loads
+- Duplicate prevention in complex scenarios
+- Integration with Model Adapter and Tool Registry
+- Performance benchmarks for context operations
 
-### Management Approaches
-- **Incremental Deduplication**: Check for duplicates as each context element is added
-- **Batch Deduplication**: Process accumulated context to remove duplicates
-- **Real-time Filtering**: Prevent duplicates from entering context in the first place
-- **Post-compaction**: Periodically review and compress context to eliminate duplicates
-- **Hierarchical Organization**: Structure context to make duplicates apparent
-- **Quality Metrics**: Track duplicate ratio as a context quality indicator
-- **Recovery Strategies**: Have fallback plans when over-aggressive deduplication removes needed context
+### Verification Tests (from IMPLEMENTATION_PLAN.md)
+- Token measurements: Validate context stays within allocated budgets
+- Relevant-file selection tests: Ensure most pertinent files are selected
+- Context regression tests: Prevent degradation in context quality over time
 
-## Architectural Recommendations
+### Performance Benchmarks
+- Context selection latency under various repository sizes
+- Budget adherence accuracy under dynamic workloads
+- Memory usage efficiency with caching strategies
+- Throughput measurements for context assembly operations
 
-Based on the research questions, a robust context engineering system should:
+## Required vs Optional vs Deferred Features
 
-1. **Implement principled context selection** combining relevance, recency, dependency, and task alignment
-2. **Deploy multi-layered duplication avoidance** using content hashing, similarity detection, and structural awareness
-3. **Establish dynamic context budgeting** with phase-aware allocation, real-time monitoring, and graceful degradation
-4. **Create intelligent summarization capabilities** tailored to file types, tasks, and multiple detail levels
-5. **Define clear context expansion triggers** driven by LLM requests, uncertainty signals, and verification needs
-6. **Build robust tool result reuse systems** with classification-sensitive policies, caching, and dependency tracking
-7. **Implement comprehensive duplicate prevention** through seen tracking, access coordination, and canonical selection
-8. **Provide context quality metrics** to monitor effectiveness and guide improvements
-9. **Enable user oversight and control** over context decisions with visibility into selection rationale
-10. **Design for incremental evolution** allowing context strategies to improve based on empirical feedback
+### Required (Must Have for Phase 4 MVP)
+- Basic context selection using relevance scoring
+- Simple token-based budgeting
+- Context assembly from repository and task sources
+- Duplicate prevention via content hashing
+- Context metrics tracking (token usage, selection counts)
+- Workspace boundary enforcement
+- Graceful degradation on budget exceeded
 
-This approach ensures the agent maintains optimal contextual awareness—providing the LLM with precisely what it needs to make good decisions while avoiding the pitfalls of context overload, redundancy, and wasted resources.
+### Optional (Should Have for Enhanced Functionality)
+- Advanced summarization techniques for large files
+- Phase-aware budgeting (different allocations for planning/execution/verification)
+- Context expansion triggers based on LLM requests
+- Tool result reuse mechanisms
+- Sophisticated duplicate detection (semantic similarity)
+- Predictive context pre-fetching
+- User-adjustable context preferences
+
+### Deferred (Future Phases)
+- Cross-repository context sharing
+- Real-time collaborative context updates
+- Advanced semantic understanding for context selection
+- Contextual learning from historical task performance
+- Integration with external knowledge bases
+- Context visualization and debugging tools
+- Machine learning-based relevance optimization
+
+## Risks, Unknowns, and Open Questions
+
+### Technical Risks
+1. **Performance Overhead**: Context selection algorithms becoming bottleneck
+   - Mitigation: Optimize algorithms, implement caching, set performance budgets
+   
+2. **Incomplete Relevance Models**: Phase 3 relevance scores not sufficient for optimal selection
+   - Mitigation: Design extensible relevance framework, incorporate multiple signals
+   
+3. **Budget Prediction Accuracy**: Difficulty estimating token needs before context assembly
+   - Mitigation: Implement progressive disclosure and iterative refinement
+   
+4. **Duplicate Detection False Positives/Negatives**: Over-aggressive or insufficient deduplication
+   - Mitigation: Tunable similarity thresholds, manual override capabilities
+
+### Architectural Questions
+1. **Granularity of Context Control**: Should context be managed at file, function, or line level?
+   - Current thinking: Multi-granular approach with appropriate caching strategies
+   
+2. **State Management**: How much context selection state should be maintained between tasks?
+   - Current thinking: Task-specific with optional persistence for related task sequences
+   
+3. **Feedback Integration**: How to best incorporate LLM feedback on context usefulness?
+   - Current thinking: Explicit requests + uncertainty signals + usage analysis
+   
+4. **Integration Depth**: How tightly should Context Manager integrate with Phase 3 components?
+   - Current thinking: Well-defined interfaces with loose coupling for replaceability
+
+### Unknowns Requiring Investigation
+1. **Optimal Relevance Formula**: What combination of signals yields best selection quality?
+2. **Budget Allocation Heuristics**: What percentages work best for different task types?
+3. **User Interaction Model**: How much control should users have over context decisions?
+4. **Long-term Context Effectiveness**: How does context quality impact overall task success?
+
+## Implementation Approach
+
+### Component Structure
+```
+ContextManager
+├── ContextSelector      # Uses Phase 3 relevance scores + additional signals
+├── ContextBudgeter      # Token allocation and enforcement
+├── ContextAssembler     # Combines sources into coherent packages
+├── DuplicatePreventer   # Tracking and deduplication mechanisms
+├── ContextMetrics       # Usage tracking and reporting
+├── ContextCompressor    # Summarization and extraction techniques
+└── ContextValidator     # Integrity and boundary checks
+```
+
+### Integration Points
+1. **Phase 3 Integration**: Consume RepositoryUnderstandingSystem outputs
+2. **Workspace Integration**: Use Workspace for safe, bounded file access
+3. **Model Adapter Interface**: Provide context packages in expected format
+4. **Metrics Integration**: Report context usage to monitoring systems
+
+### Development Phases
+1. **Foundation**: Basic context selection and budgeting
+2. **Assembly**: Context assembly and integration with Phase 3
+3. **Optimization**: Duplicate prevention and compression
+4. **Metrics**: Tracking and reporting capabilities
+5. **Verification**: Testing against official requirements
+
+## Documentation Requirements
+
+### API Documentation
+- Public interfaces for ContextManager and subcomponents
+- Data structures for context packages and metadata
+- Configuration options for budgeting and selection policies
+
+### User Documentation
+- How context selection works and influences agent behavior
+- Tips for optimizing context usage through task formulation
+- Explanation of context metrics and what they indicate
+- Troubleshooting guide for context-related issues
+
+### Developer Documentation
+- Architecture details and component responsibilities
+- Extension points for custom selection strategies
+- Performance characteristics and optimization guidelines
+- Testing procedures and benchmark methodologies
+
+## Open Issues for Implementation
+
+1. **Exact Interface Specifications**: Define precise data structures between Phase 3 and Phase 4
+2. **Relevance Signal Weighting**: Determine optimal combination of relevance factors
+3. **Budget Algorithm Selection**: Choose between fixed partitioning, priority-based, or dynamic allocation
+4. **Duplicate Detection Thresholds**: Establish baseline similarity thresholds for different code types
+5. **Metrics Granularity**: Decide what level of detail to track for context usage analysis
+6. **Error Handling Strategies**: Define behavior when context assembly fails or exceeds limits severely
+7. **Performance Targets**: Finalize latency and throughput requirements based on system benchmarks
+8. **Integration Testing Approach**: Plan for end-to-end testing with actual LLM interactions
+
+## Summary
+
+Phase 4 (Context Engineering) builds directly upon the Phase 3 Repository Understanding system to provide intelligent context management for the LLM. By leveraging Phase 3's discovery, metadata, relevance, search, and analysis capabilities, the Context Manager will select, assemble, and optimize context within token budgets while preventing duplication and ensuring workspace security.
+
+The research indicates that Phase 4 should focus on implementing the core responsibilities outlined in the official documentation: context selection, budgeting, assembly, duplicate prevention, and metrics, with verification through token measurements, relevant-file selection tests, and context regression tests.
+
+This phase is critical for enabling the agent to work effectively within LLM token constraints while providing the most pertinent information for successful code modifications.
+EOF
