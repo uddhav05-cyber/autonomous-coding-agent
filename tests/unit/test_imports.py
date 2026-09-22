@@ -12,7 +12,7 @@ def test_package_imports_successfully():
 
 def test_subpackages_import_successfully():
     """Test that subpackages can be imported."""
-    from autonomous_agent import config, errors, logging, models
+    from autonomous_agent import config, errors, agent_logging as logging, models
     assert config is not None
     assert errors is not None
     assert logging is not None
