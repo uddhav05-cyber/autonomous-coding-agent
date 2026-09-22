@@ -72,6 +72,18 @@ class AgentOrchestratorState:
     error_count: int = 0
     consecutive_errors: int = 0
 
+    # Retry and failure recovery
+    max_consecutive_failures: int = 3
+    retry_base_delay: float = 1.0  # seconds
+    max_retry_delay: float = 30.0
+    retry_multiplier: float = 2.0
+
+    # Progress detection
+    stall_detection_iterations: int = 3
+    last_progress_iteration: int = 0
+    last_successful_tool_calls: int = 0
+    last_workspace_file_count: int = 0
+
     # Completion signals
     is_complete: bool = False
     completion_reason: str = ""
@@ -105,7 +117,13 @@ class AgentOrchestrator:
         workspace: Workspace,
         max_iterations: int = 10,
         iteration_timeout: float = 120.0,
-        enable_metrics: bool = True
+        enable_metrics: bool = True,
+        # Enhanced control parameters
+        max_consecutive_failures: int = 3,
+        retry_base_delay: float = 1.0,
+        max_retry_delay: float = 30.0,
+        retry_multiplier: float = 2.0,
+        stall_detection_iterations: int = 3
     ):
         """Initialize the Agent Orchestrator.
 
@@ -118,6 +136,11 @@ class AgentOrchestrator:
             max_iterations: Maximum iterations before forced termination
             iteration_timeout: Timeout per iteration in seconds
             enable_metrics: Whether to collect execution metrics
+            max_consecutive_failures: Maximum consecutive failures before termination
+            retry_base_delay: Base delay for exponential backoff (seconds)
+            max_retry_delay: Maximum delay for exponential backoff (seconds)
+            retry_multiplier: Multiplier for exponential backoff
+            stall_detection_iterations: Number of iterations with no progress to consider stalled
         """
         self.model_adapter = model_adapter
         self.context_manager = context_manager
@@ -128,9 +151,21 @@ class AgentOrchestrator:
         self.iteration_timeout = iteration_timeout
         self.enable_metrics = enable_metrics
 
+        # Enhanced control parameters
+        self.max_consecutive_failures = max_consecutive_failures
+        self.retry_base_delay = retry_base_delay
+        self.max_retry_delay = max_retry_delay
+        self.retry_multiplier = retry_multiplier
+        self.stall_detection_iterations = stall_detection_iterations
+
         # Internal state
         self._state: Optional[AgentOrchestratorState] = None
-        # TODO: Add cancellation token or event for graceful shutdown
+        self._cancelled: bool = False
+        # TODO: Add cancellation token or event for graceful shutdown (we have a basic cancelled flag)
+
+    def cancel(self) -> None:
+        """Cancel the agent execution gracefully."""
+        self._cancelled = True
 
     async def execute_task(self, task_description: str) -> AgentOrchestratorState:
         """Execute a task using the agent orchestration loop.
@@ -144,7 +179,12 @@ class AgentOrchestrator:
         # Initialize state
         self._state = AgentOrchestratorState(
             task_description=task_description,
-            max_iterations=self.max_iterations
+            max_iterations=self.max_iterations,
+            max_consecutive_failures=self.max_consecutive_failures,
+            retry_base_delay=self.retry_base_delay,
+            max_retry_delay=self.max_retry_delay,
+            retry_multiplier=self.retry_multiplier,
+            stall_detection_iterations=self.stall_detection_iterations
         )
         self._state.state = AgentState.RUNNING
         self._state.start_time = time.time()
@@ -173,6 +213,20 @@ class AgentOrchestrator:
                 if self._state.is_complete:
                     break
 
+                # Check for stall
+                if self._check_stall():
+                    self._state.state = AgentState.FAILED
+                    self._state.is_complete = True
+                    self._state.completion_reason = "Stalled: no progress for too many iterations"
+                    break
+
+                # Check for cancellation
+                if self._cancelled:
+                    self._state.state = AgentState.CANCELLED
+                    self._state.is_complete = True
+                    self._state.completion_reason = "Task cancelled by user"
+                    break
+
                 # Small delay between iterations to prevent tight looping
                 await asyncio.sleep(0.1)
 
@@ -197,93 +251,203 @@ class AgentOrchestrator:
         return self._state
 
     async def _execute_iteration(self) -> None:
-        """Execute a single iteration of the agent loop."""
+        """Execute a single iteration of the agent loop with retry logic and progress tracking."""
         if self._state is None:
             raise RuntimeError("Orchestrator state not initialized")
 
-        try:
-            # Step 1: Build LLM prompt from current context and task description
-            prompt = await self._build_prompt()
-
-            # Step 2: Invoke LLM via Model Adapter
-            model_request = ModelRequest(
-                prompt=prompt,
-                temperature=0.7,  # Could be made configurable
-                max_tokens=4000,  # Could be made configurable
-                tools=self._get_available_tools_schema()  # Provide tool definitions
-            )
-
-            # Get response from model adapter with timeout
+        # Retry loop for transient errors
+        max_retries_per_iteration = 3
+        for attempt in range(max_retries_per_iteration + 1):
             try:
-                model_response = await asyncio.wait_for(
-                    self.model_adapter._generate(model_request),
-                    timeout=30.0  # LLM response timeout
+                # Step 1: Build LLM prompt from current context and task description
+                prompt = await self._build_prompt()
+
+                # Step 2: Invoke LLM via Model Adapter
+                model_request = ModelRequest(
+                    prompt=prompt,
+                    temperature=0.7,  # Could be made configurable
+                    max_tokens=4000,  # Could be made configurable
+                    tools=self._get_available_tools_schema()  # Provide tool definitions
                 )
-            except asyncio.TimeoutError:
-                raise TimeoutError("LLM response timeout", tool_name="model_adapter")
 
-            # Update token usage
-            if hasattr(model_response, 'usage') and model_response.usage:
-                self._state.total_tokens_used += getattr(model_response.usage, 'total_tokens', 0)
+                # Get response from model adapter with timeout
+                try:
+                    model_response = await asyncio.wait_for(
+                        self.model_adapter._generate(model_request),
+                        timeout=30.0  # LLM response timeout
+                    )
+                except asyncio.TimeoutError:
+                    raise TimeoutError("LLM response timeout", tool_name="model_adapter")
 
-            # Step 3: Parse LLM response for tool calls or reasoning
-            tool_calls = self._extract_tool_calls(model_response)
-            reasoning_text = model_response.text.strip() if model_response.text else ""
+                # Update token usage
+                if hasattr(model_response, 'usage') and model_response.usage:
+                    self._state.total_tokens_used += getattr(model_response.usage, 'total_tokens', 0)
 
-            # Store execution history
-            execution_record = {
-                "iteration": self._state.current_iteration,
-                "timestamp": time.time(),
-                "prompt_length": len(prompt),
-                "response_length": len(model_response.text) if model_response.text else 0,
-                "tool_calls_count": len(tool_calls),
-                "reasoning": reasoning_text[:200] + "..." if len(reasoning_text) > 200 else reasoning_text
-            }
-            self._state.execution_history.append(execution_record)
+                # Step 3: Parse LLM response for tool calls or reasoning
+                tool_calls = self._extract_tool_calls(model_response)
+                reasoning_text = model_response.text.strip() if model_response.text else ""
 
-            # Step 4: If no tool calls, evaluate if we can complete based on reasoning
-            if not tool_calls:
-                await self._evaluate_completion_from_reasoning(reasoning_text)
-                return
+                # Store execution history
+                execution_record = {
+                    "iteration": self._state.current_iteration,
+                    "timestamp": time.time(),
+                    "prompt_length": len(prompt),
+                    "response_length": len(model_response.text) if model_response.text else 0,
+                    "tool_calls_count": len(tool_calls),
+                    "reasoning": reasoning_text[:200] + "..." if len(reasoning_text) > 200 else reasoning_text
+                }
+                self._state.execution_history.append(execution_record)
 
-            # Step 5: Validate tool calls for safety and permissions
-            validated_tool_calls = await self._validate_tool_calls(tool_calls)
+                # Step 4: If no tool calls, evaluate if we can complete based on reasoning
+                if not tool_calls:
+                    await self._evaluate_completion_from_reasoning(reasoning_text)
+                    return
 
-            if not validated_tool_calls:
-                # No valid tool calls after validation, treat as completion attempt
-                await self._evaluate_completion_from_reasoning(
-                    "No valid tool calls available after safety validation. "
-                    "Considering task complete based on reasoning: " + reasoning_text
-                )
-                return
+                # Step 5: Validate tool calls for safety and permissions
+                validated_tool_calls = await self._validate_tool_calls(tool_calls)
 
-            # Step 6: Execute validated tool calls
-            tool_results = await self._execute_tool_calls(validated_tool_calls)
+                if not validated_tool_calls:
+                    # No valid tool calls after validation, treat as completion attempt
+                    await self._evaluate_completion_from_reasoning(
+                        "No valid tool calls available after safety validation. "
+                        "Considering task complete based on reasoning: " + reasoning_text
+                    )
+                    return
 
-            # Step 7: Process results and update context
-            await self._process_tool_results(tool_results)
+                # Step 6: Execute validated tool calls
+                tool_results = await self._execute_tool_calls(validated_tool_calls)
 
-            # Step 8: Update execution history with results
-            self._state.tool_call_history.extend([
-                {"call": call.dict() if hasattr(call, 'dict') else str(call),
-                 "result": result.dict() if hasattr(result, 'dict') else str(result)}
-                for call, result in zip(validated_tool_calls, tool_results)
-            ])
+                # Step 7: Process results and update context
+                await self._process_tool_results(tool_results)
 
-        except Exception as e:
-            # Handle iteration-level errors
-            self._state.error_count += 1
-            self._state.consecutive_errors += 1
-            self._state.last_error = ToolError(
-                f"Iteration {self._state.current_iteration} failed: {str(e)}",
-                tool_name="agent_orchestrator"
-            ) if not isinstance(e, ToolError) else e
+                # Step 8: Update execution history with results
+                self._state.tool_call_history.extend([
+                    {"call": call.dict() if hasattr(call, 'dict') else str(call),
+                     "result": result.dict() if hasattr(result, 'dict') else str(result)}
+                    for call, result in zip(validated_tool_calls, tool_results)
+                ])
 
-            # Check if we should retry or fail
-            if self._state.consecutive_errors >= 3:
-                self._state.state = AgentState.FAILED
-                self._state.is_complete = True
-                self._state.completion_reason = f"Too many consecutive errors: {self._state.consecutive_errors}"
+                # If we succeeded, update progress tracking and break out of retry loop
+                self._update_progress(success=True)
+                return  # Success, exit the iteration
+
+            except Exception as e:
+                # If we have retries left and the error is retryable, wait and retry
+                if attempt < max_retries_per_iteration and self._is_retryable_error(e):
+                    delay = self._calculate_backoff_delay(attempt)
+                    await asyncio.sleep(delay)
+                    continue
+                else:
+                    # No more retries or non-retryable error, handle the error
+                    self._state.error_count += 1
+                    self._state.consecutive_errors += 1
+                    self._state.last_error = ToolError(
+                        f"Iteration {self._state.current_iteration} failed: {str(e)}",
+                        tool_name="agent_orchestrator"
+                    ) if not isinstance(e, ToolError) else e
+
+                    # Update progress tracking for failed iteration
+                    self._update_progress(success=False)
+
+                    # Check if we should terminate due to consecutive failures
+                    if self._state.consecutive_errors >= self._state.max_consecutive_failures:
+                        self._state.state = AgentState.FAILED
+                        self._state.is_complete = True
+                        self._state.completion_reason = f"Too many consecutive errors: {self._state.consecutive_errors}"
+                    return  # Exit the iteration (either failed or will be retried in next iteration if not complete)
+
+        # If we exhausted all retries without success, the error has already been handled above
+        # and we have returned. This point should not be reached, but just in case:
+        if self._state is not None and not self._state.is_complete:
+            self._state.state = AgentState.FAILED
+            self._state.is_complete = True
+            if not self._state.completion_reason:
+                self._state.completion_reason = "Max retries exceeded without success"
+
+    def _is_retryable_error(self, error: Exception) -> bool:
+        """Determine if an error is retryable at the orchestrator level.
+
+        Args:
+            error: The error to check
+
+        Returns:
+            True if the error is retryable, False otherwise
+        """
+        # Import error types locally to avoid circular imports
+        from autonomous_agent.tool.errors import (
+            TimeoutError,
+            InternalToolError,
+            ResourceLimitError
+        )
+
+        # Consider these errors as retryable
+        if isinstance(error, (TimeoutError, InternalToolError, ResourceLimitError)):
+            return True
+
+        # Consider model-related transient errors as retryable
+        # Note: We don't have direct access to model-specific errors here,
+        # but we can check for common transient error messages if needed
+
+        # By default, consider other errors as non-retryable
+        return False
+
+    def _calculate_backoff_delay(self, attempt: int) -> float:
+        """Calculate delay for exponential backoff with jitter.
+
+        Args:
+            attempt: The current attempt number (0-based)
+
+        Returns:
+            Delay in seconds
+        """
+        import random
+        base = min(
+            self._state.retry_base_delay * (self._state.retry_multiplier ** attempt),
+            self._state.max_retry_delay
+        )
+        # Add jitter to prevent thundering herd
+        jitter = random.uniform(0, 0.1 * base)
+        return base + jitter
+
+    def _update_progress(self, success: bool) -> None:
+        """Update progress tracking for stall detection.
+
+        Args:
+            success: Whether the current iteration was successful
+        """
+        if self._state is None:
+            return
+
+        # Update last progress iteration if we had success
+        if success:
+            self._state.last_progress_iteration = self._state.current_iteration
+            # Update workspace file count for progress detection
+            try:
+                # Count files in workspace (simplified)
+                import os
+                if os.path.exists(str(self.workspace.workspace_root)):
+                    file_count = sum(len(files) for _, _, files in os.walk(str(self.workspace.workspace_root)))
+                    self._state.last_workspace_file_count = file_count
+                else:
+                    self._state.last_workspace_file_count = 0
+            except Exception:
+                # If we can't count files, skip workspace tracking
+                pass
+        # Note: We don't update on failure, but we could track consecutive failures elsewhere
+
+    def _check_stall(self) -> bool:
+        """Check if the agent has stalled (no progress for too many iterations).
+
+        Returns:
+            True if stalled, False otherwise
+        """
+        if self._state is None:
+            return False
+        # If we haven't made any progress yet, we can't stall
+        if self._state.last_progress_iteration == 0:
+            return False
+        iterations_since_progress = self._state.current_iteration - self._state.last_progress_iteration
+        return iterations_since_progress >= self._state.stall_detection_iterations
 
     async def _build_prompt(self) -> str:
         """Build the LLM prompt from current context and task description.

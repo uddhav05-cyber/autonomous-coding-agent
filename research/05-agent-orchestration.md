@@ -26,18 +26,18 @@ Current autonomous agents lack sophisticated coordination mechanisms for iterati
 ## 5. Architecture
 ```
 Iteration Loop:
-[Orchestrator]
+[Orchestrator] 
   ↓ (decides action)
-[Model Adapter] → LLM
+[Model Adapter] → LLM 
   ↓ (gets response)
-[Orchestrator]
+[Orchestrator] 
   ↓ (interprets response, validates safety)
 [Tool System] → [Workspace] (if tool execution needed)
   ↓ (gets results)
-[Context Manager]
+[Context Manager] 
   ↓ (updates context with results)
-[Orchestrator]
-  ↓ (evaluates completion, decides continue/stop)
+[Orchestrator] 
+  ↓ (evaluates completion, continues/stop)
 ```
 
 ## 6. Agent Execution Loop
@@ -342,31 +342,154 @@ MODEL_ERROR: LLM-specific issues (malformed response, provider error, content fi
 - Ideal iteration limit settings based on task complexity metrics
 - Most informative metrics for predicting task success/failure early in execution
 
-## Implementation Status
-As of the current implementation, Phase 7.1 (Basic Orchestrator) has been implemented. The implementation includes:
-- AgentOrchestrator class with execute_task method
-- AgentOrchestratorState dataclass for state tracking
-- AgentState enum for lifecycle management
-- Integration with Model Adapter for LLM invocation
-- Integration with Context Manager for context retrieval (via create_context_package)
-- Integration with Tool System for tool execution (via ToolRegistry, ToolPolicyEngine, ToolExecutor)
-- Basic prompt construction from context and task description
-- Basic tool call extraction from LLM responses
-- Basic validation of tool calls (existence and permissions)
-- Basic execution loop with iteration limits and timeout handling
-- Basic completion evaluation based on LLM reasoning
-- State tracking across iterations (execution history, tool call history, etc.)
-- Error handling for unexpected errors and consecutive failures
+## Phase 7.2 — Enhanced Control Research
 
-The following features are not yet implemented:
-- Advanced retry strategies with exponential backoff
-- Context compression and relevance scoring
-- Adaptive iteration limits based on progress
-- Sophisticated failure recovery and alternative approach generation
-- Comprehensive audit trail and metrics collection
-- User interruption handling and state persistence
-- Sophisticated termination conditions beyond max iterations and overall timeout
-- Progress-based timeout adjustment
-- Resource limit enforcement and monitoring (beyond basic token counting)
-- Safety violation tracking and prevention
-- Detailed observability metrics
+### Phase 7.2 Objective
+Research how to evolve the existing Basic Agent Orchestrator into a more reliable and controllable autonomous execution system without rewriting the Phase 7.1 foundation.
+The research must build directly on the existing AgentOrchestrator, AgentOrchestratorState, AgentState, Model Adapter, Context Manager, Tool System, and Workspace architecture.
+
+### Research Areas
+Cover the following areas in detail.
+
+1. Advanced Error Recovery
+Research:
+* transient vs permanent failures
+* model failures
+* tool failures
+* validation failures
+* permission failures
+* timeout failures
+* repeated failures
+* recovery strategies
+* safe retry boundaries
+* retry budgets
+* maximum consecutive failures
+* failure classification
+* when to stop instead of retrying
+Clearly distinguish which errors should be retried and which must immediately terminate execution.
+
+2. Retry Strategy
+Research a controlled retry mechanism for the orchestrator.
+Consider:
+* exponential backoff
+* jitter
+* maximum retry count
+* per-operation retry budgets
+* per-task retry budgets
+* retryable vs non-retryable errors
+* interaction with Model Adapter retry logic
+* interaction with Tool System error handling
+* prevention of retry storms
+* preventing duplicate destructive tool operations
+Do NOT duplicate retry logic that already belongs to Phase 5 or Phase 6.
+
+3. Sophisticated Termination Conditions
+Research termination beyond the basic Phase 7.1 conditions.
+Consider:
+* successful completion
+* explicit model completion
+* repeated identical actions
+* no-progress detection
+* excessive tool failures
+* excessive token/resource consumption
+- safety violations
+- retry exhaustion
+- context exhaustion
+- iteration exhaustion
+- task timeout
+- unrecoverable errors
+Define deterministic termination rules wherever possible.
+
+4. Progress Detection
+Research how the orchestrator can determine whether an agent is actually making progress.
+Consider:
+* state changes
+* workspace changes
+* tool results
+* repeated tool calls
+* repeated model responses
+* task completion signals
+* progress counters
+* stagnation detection
+Avoid implementing vague or unreliable “AI decides if it is progressing” logic.
+
+5. Cancellation and Interruption
+Research controlled cancellation support.
+Consider:
+* user cancellation
+* programmatic cancellation
+* cancellation between iterations
+* cancellation during model execution
+* cancellation during tool execution
+* cleanup requirements
+* state transitions
+* preserving audit/history information
+* safe handling of partially completed operations
+Ensure cancellation cannot bypass Tool System safety controls.
+
+6. State Persistence
+Research whether and how AgentOrchestratorState should be persisted.
+Consider:
+* serializable state representation
+* task identifiers
+* iteration state
+* execution history
+* tool-call history
+* error state
+* timestamps
+* resumability
+* crash recovery
+* consistency guarantees
+* security of persisted state
+Do not introduce a database unless research demonstrates that it is necessary.
+
+7. Resource and Execution Budgets
+Research controlled limits for:
+* maximum iterations
+* maximum model calls
+* maximum tool calls
+* maximum execution time
+* maximum consecutive failures
+* maximum retry attempts
+* token/cost budget
+* tool-specific limits
+Determine which component should own each budget.
+Do not duplicate Phase 4 Context Manager budgeting or Phase 6 Tool System limits.
+
+8. Safety Controls
+Research additional orchestrator-level safety controls.
+Consider:
+* action allowlists/denylists
+* destructive-operation awareness
+* confirmation requirements
+* safety violation tracking
+* escalation handling
+* privilege boundaries
+* untrusted model output
+* protection against infinite loops
+* protection against repeated destructive actions
+The orchestrator must not bypass Phase 6 Tool Policy or Tool Executor controls.
+
+9. Observability
+Research useful orchestration metrics.
+Consider:
+* task duration
+* iteration count
+* model calls
+* tool calls
+* successful/failed tool calls
+* retries
+* termination reason
+* token usage
+* estimated cost
+* errors
+* cancellation
+* progress/stagnation events
+Clearly separate orchestration metrics from Phase 4, Phase 5, and Phase 6 responsibilities.
+
+10. Architecture Changes
+Determine the minimum architectural changes required for Phase 7.2.
+Identify:
+* new classes
+* new dataclasses
+* new enums
