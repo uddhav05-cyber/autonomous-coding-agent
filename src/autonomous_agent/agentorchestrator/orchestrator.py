@@ -34,6 +34,9 @@ from autonomous_agent.tool.errors import (
     ResourceLimitError,
     InternalToolError
 )
+import json
+import os
+import hashlib
 
 
 class AgentState(Enum):
@@ -161,11 +164,230 @@ class AgentOrchestrator:
         # Internal state
         self._state: Optional[AgentOrchestratorState] = None
         self._cancelled: bool = False
+        # Persistence and recovery
+        self.persistence_dir = os.path.join(str(self.workspace.workspace_root), ".orchestrator_state")
+        os.makedirs(self.persistence_dir, exist_ok=True)
         # TODO: Add cancellation token or event for graceful shutdown (we have a basic cancelled flag)
 
     def cancel(self) -> None:
         """Cancel the agent execution gracefully."""
         self._cancelled = True
+    def _get_persistence_file_path(self, checkpoint_name: str = "latest") -> str:
+        """Get the file path for a persistence checkpoint.
+
+        Args:
+            checkpoint_name: Name of the checkpoint
+
+        Returns:
+            Full path to the persistence file
+        """
+        # Sanitize checkpoint name to prevent directory traversal
+        safe_name = "".join(c for c in checkpoint_name if c.isalnum() or c in ("-", "_", ".")).rstrip()
+        if not safe_name:
+            safe_name = "latest"
+        return os.path.join(self.persistence_dir, f"{safe_name}.json")
+    def _persist_state(self, checkpoint_name: str = "latest") -> None:
+        """Persist the current orchestrator state to a file.
+
+        Args:
+            checkpoint_name: Name of the checkpoint
+        """
+        if self._state is None:
+            return
+
+        # Convert state to a dictionary, excluding non-serializable fields
+        state_dict = {
+            "task_id": self._state.task_id,
+            "task_description": self._state.task_description,
+            "current_iteration": self._state.current_iteration,
+            "max_iterations": self._state.max_iterations,
+            "state": self._state.state.name,  # Store enum name
+            "start_time": self._state.start_time,
+            "last_activity_time": self._state.last_activity_time,
+            "total_tokens_used": self._state.total_tokens_used,
+            "total_tool_calls": self._state.total_tool_calls,
+            "execution_history": self._state.execution_history,
+            "tool_call_history": self._state.tool_call_history,
+            "tool_result_history": self._state.tool_result_history,
+            "last_error": self._state.last_error.__dict__ if self._state.last_error else None,
+            "error_count": self._state.error_count,
+            "consecutive_errors": self._state.consecutive_errors,
+            "max_consecutive_failures": self._state.max_consecutive_failures,
+            "retry_base_delay": self._state.retry_base_delay,
+            "max_retry_delay": self._state.max_retry_delay,
+            "retry_multiplier": self._state.retry_multiplier,
+            "stall_detection_iterations": self._state.stall_detection_iterations,
+            "last_progress_iteration": self._state.last_progress_iteration,
+            "last_successful_tool_calls": self._state.last_successful_tool_calls,
+            "last_workspace_file_count": self._state.last_workspace_file_count,
+            "is_complete": self._state.is_complete,
+            "completion_reason": self._state.completion_reason,
+            "final_response": self._state.final_response,
+            "safety_violations": self._state.safety_violations,
+            "resource_warnings": self._state.resource_warnings,
+        }
+
+        # Remove any potentially sensitive data (though none should be present)
+        # We could add more filtering here if needed
+
+        file_path = self._get_persistence_file_path(checkpoint_name)
+        try:
+            with open(file_path, "w") as f:
+                json.dump(state_dict, f, indent=2)
+        except Exception as e:
+            # Log error but don't crash the orchestrator
+            pass  # In production, we might want to log this
+    def _recover_state(self, checkpoint_name: str = "latest") -> bool:
+        """Recover orchestrator state from a persisted file.
+
+        Args:
+            checkpoint_name: Name of the checkpoint to recover
+
+        Returns:
+            True if recovery was successful, False otherwise
+        """
+        file_path = self._get_persistence_file_path(checkpoint_name)
+        if not os.path.exists(file_path):
+            return False
+
+        try:
+            with open(file_path, "r") as f:
+                state_dict = json.load(f)
+
+            # Validate the recovered state
+            if not self._validate_recovered_state(state_dict):
+                return False
+
+            # Check task description match: if current task description is set (non-empty), it must match
+            if self._state is not None and self._state.task_description and self._state.task_description != state_dict.get("task_description"):
+                return False
+
+            # Reconstruct the state
+            # We need to create a new AgentOrchestratorState instance
+            # and populate it with the recovered data
+            recovered_state = AgentOrchestratorState(
+                task_id=state_dict["task_id"],
+                task_description=state_dict["task_description"],
+                current_iteration=state_dict["current_iteration"],
+                max_iterations=state_dict["max_iterations"],
+                state=AgentState[state_dict["state"]],  # Convert enum name back to enum
+                start_time=state_dict["start_time"],
+                last_activity_time=state_dict["last_activity_time"],
+                total_tokens_used=state_dict["total_tokens_used"],
+                total_tool_calls=state_dict["total_tool_calls"],
+                execution_history=state_dict["execution_history"],
+                tool_call_history=state_dict["tool_call_history"],
+                tool_result_history=state_dict["tool_result_history"],
+                last_error=ToolError(**state_dict["last_error"]) if state_dict["last_error"] else None,
+                error_count=state_dict["error_count"],
+                consecutive_errors=state_dict["consecutive_errors"],
+                max_consecutive_failures=state_dict["max_consecutive_failures"],
+                retry_base_delay=state_dict["retry_base_delay"],
+                max_retry_delay=state_dict["max_retry_delay"],
+                retry_multiplier=state_dict["retry_multiplier"],
+                stall_detection_iterations=state_dict["stall_detection_iterations"],
+                last_progress_iteration=state_dict["last_progress_iteration"],
+                last_successful_tool_calls=state_dict["last_successful_tool_calls"],
+                last_workspace_file_count=state_dict["last_workspace_file_count"],
+                is_complete=state_dict["is_complete"],
+                completion_reason=state_dict["completion_reason"],
+                final_response=state_dict["final_response"],
+                safety_violations=state_dict["safety_violations"],
+                resource_warnings=state_dict["resource_warnings"],
+            )
+
+            self._state = recovered_state
+            return True
+        except Exception as e:
+            # Recovery failed
+            return False
+    def _validate_recovered_state(self, state_dict: dict) -> bool:
+        """Validate recovered state dictionary.
+
+        Args:
+            state_dict: Dictionary containing state data
+
+        Returns:
+            True if state is valid, False otherwise
+        """
+        required_fields = [
+            "task_id", "task_description", "current_iteration", "max_iterations",
+            "state", "start_time", "last_activity_time", "total_tokens_used",
+            "total_tool_calls", "execution_history", "tool_call_history",
+            "tool_result_history", "last_error", "error_count", "consecutive_errors",
+            "max_consecutive_failures", "retry_base_delay", "max_retry_delay",
+            "retry_multiplier", "stall_detection_iterations", "last_progress_iteration",
+            "last_successful_tool_calls", "last_workspace_file_count",
+            "is_complete", "completion_reason", "final_response",
+            "safety_violations", "resource_warnings"
+        ]
+
+        for field in required_fields:
+            if field not in state_dict:
+                return False
+
+        # Additional validation
+        if not isinstance(state_dict["task_id"], str):
+            return False
+        if not isinstance(state_dict["task_description"], str):
+            return False
+        if not isinstance(state_dict["current_iteration"], int) or state_dict["current_iteration"] < 0:
+            return False
+        if not isinstance(state_dict["max_iterations"], int) or state_dict["max_iterations"] <= 0:
+            return False
+        if state_dict["state"] not in [s.name for s in AgentState]:
+            return False
+        if not isinstance(state_dict["start_time"], (int, float)):
+            return False
+        if not isinstance(state_dict["last_activity_time"], (int, float)):
+            return False
+        if not isinstance(state_dict["total_tokens_used"], int) or state_dict["total_tokens_used"] < 0:
+            return False
+        if not isinstance(state_dict["total_tool_calls"], int) or state_dict["total_tool_calls"] < 0:
+            return False
+        if not isinstance(state_dict["execution_history"], list):
+            return False
+        if not isinstance(state_dict["tool_call_history"], list):
+            return False
+        if not isinstance(state_dict["tool_result_history"], list):
+            return False
+        if state_dict["last_error"] is not None and not isinstance(state_dict["last_error"], dict):
+            return False
+        if not isinstance(state_dict["error_count"], int) or state_dict["error_count"] < 0:
+            return False
+        if not isinstance(state_dict["consecutive_errors"], int) or state_dict["consecutive_errors"] < 0:
+            return False
+        if not isinstance(state_dict["max_consecutive_failures"], int) or state_dict["max_consecutive_failures"] <= 0:
+            return False
+        if not isinstance(state_dict["retry_base_delay"], (int, float)) or state_dict["retry_base_delay"] < 0:
+            return False
+        if not isinstance(state_dict["max_retry_delay"], (int, float)) or state_dict["max_retry_delay"] < 0:
+            return False
+        if not isinstance(state_dict["retry_multiplier"], (int, float)) or state_dict["retry_multiplier"] <= 0:
+            return False
+        if not isinstance(state_dict["stall_detection_iterations"], int) or state_dict["stall_detection_iterations"] < 0:
+            return False
+        if not isinstance(state_dict["last_progress_iteration"], int) or state_dict["last_progress_iteration"] < 0:
+            return False
+        if not isinstance(state_dict["last_successful_tool_calls"], int) or state_dict["last_successful_tool_calls"] < 0:
+            return False
+        if not isinstance(state_dict["last_workspace_file_count"], int) or state_dict["last_workspace_file_count"] < 0:
+            return False
+        if not isinstance(state_dict["is_complete"], bool):
+            return False
+        if not isinstance(state_dict["completion_reason"], str):
+            return False
+        if not isinstance(state_dict["final_response"], str):
+            return False
+        if not isinstance(state_dict["safety_violations"], int) or state_dict["safety_violations"] < 0:
+            return False
+        if not isinstance(state_dict["resource_warnings"], list):
+            return False
+        for warning in state_dict["resource_warnings"]:
+            if not isinstance(warning, str):
+                return False
+
+        return True
 
     async def execute_task(self, task_description: str) -> AgentOrchestratorState:
         """Execute a task using the agent orchestration loop.
@@ -176,19 +398,29 @@ class AgentOrchestrator:
         Returns:
             Final agent state after task completion or termination
         """
-        # Initialize state
-        self._state = AgentOrchestratorState(
-            task_description=task_description,
-            max_iterations=self.max_iterations,
-            max_consecutive_failures=self.max_consecutive_failures,
-            retry_base_delay=self.retry_base_delay,
-            max_retry_delay=self.max_retry_delay,
-            retry_multiplier=self.retry_multiplier,
-            stall_detection_iterations=self.stall_detection_iterations
-        )
-        self._state.state = AgentState.RUNNING
-        self._state.start_time = time.time()
-        self._state.last_activity_time = self._state.start_time
+        # Attempt to recover state from latest checkpoint
+        recovered = self._recover_state("latest")
+        if recovered and self._state is not None and not self._state.is_complete and self._state.task_description == task_description:
+            # Recovery successful and we have a valid, incomplete state for the same task
+            # Update the last activity time to now to prevent immediate timeout
+            self._state.last_activity_time = time.time()
+            # Ensure the state is RUNNING
+            if self._state.state != AgentState.RUNNING:
+                self._state.state = AgentState.RUNNING
+        else:
+            # Initialize state
+            self._state = AgentOrchestratorState(
+                task_description=task_description,
+                max_iterations=self.max_iterations,
+                max_consecutive_failures=self.max_consecutive_failures,
+                retry_base_delay=self.retry_base_delay,
+                max_retry_delay=self.max_retry_delay,
+                retry_multiplier=self.retry_multiplier,
+                stall_detection_iterations=self.stall_detection_iterations
+            )
+            self._state.state = AgentState.RUNNING
+            self._state.start_time = time.time()
+            self._state.last_activity_time = self._state.start_time
 
         try:
             # Main execution loop
@@ -294,7 +526,12 @@ class AgentOrchestrator:
                     "prompt_length": len(prompt),
                     "response_length": len(model_response.text) if model_response.text else 0,
                     "tool_calls_count": len(tool_calls),
-                    "reasoning": reasoning_text[:200] + "..." if len(reasoning_text) > 200 else reasoning_text
+                    "reasoning": reasoning_text[:200] + "..." if len(reasoning_text) > 200 else reasoning_text,
+                    "state_at_start": self._state.state.name,
+                    "retry_attempt": attempt,
+                    "model_usage": {
+                        "total_tokens": getattr(model_response.usage, 'total_tokens', 0) if hasattr(model_response, 'usage') and model_response.usage else 0
+                    } if hasattr(model_response, 'usage') else None
                 }
                 self._state.execution_history.append(execution_record)
 
@@ -329,6 +566,7 @@ class AgentOrchestrator:
 
                 # If we succeeded, update progress tracking and break out of retry loop
                 self._update_progress(success=True)
+                self._persist_state()
                 return  # Success, exit the iteration
 
             except Exception as e:
@@ -348,6 +586,7 @@ class AgentOrchestrator:
 
                     # Update progress tracking for failed iteration
                     self._update_progress(success=False)
+                    self._persist_state()
 
                     # Check if we should terminate due to consecutive failures
                     if self._state.consecutive_errors >= self._state.max_consecutive_failures:
@@ -363,6 +602,7 @@ class AgentOrchestrator:
             self._state.is_complete = True
             if not self._state.completion_reason:
                 self._state.completion_reason = "Max retries exceeded without success"
+            self._persist_state()
 
     def _is_retryable_error(self, error: Exception) -> bool:
         """Determine if an error is retryable at the orchestrator level.

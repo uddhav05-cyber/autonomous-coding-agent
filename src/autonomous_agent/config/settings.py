@@ -6,7 +6,7 @@ from __future__ import annotations
 import os
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class ModelProviderConfig(BaseModel):
@@ -18,7 +18,7 @@ class ModelProviderConfig(BaseModel):
     max_tokens: int = Field(default=4096, gt=0)
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
 
-    @validator("api_key", always=True)
+    @field_validator("api_key")
     def _validate_api_key(cls, v):
         # Don't validate here - allow None for local models
         # Actual validation should happen when the model is used
@@ -122,7 +122,7 @@ class Settings(BaseModel):
         except ValueError:
             return raw_value
 
-    @validator("workspace_path")
+    @field_validator("workspace_path")
     def _validate_workspace_path(cls, v):
         # Ensure it's a relative path or absolute path
         # Actual validation of whether it's a valid directory happens at runtime
