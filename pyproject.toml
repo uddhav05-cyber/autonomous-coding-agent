@@ -25,6 +25,7 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+asyncio_mode = "auto"
 
 [project.scripts]
 autonomous-agent = "autonomous_agent.__main__:main"
