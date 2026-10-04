@@ -733,3 +733,78 @@ Consider:
 - Metrics for evaluating agent intelligence and capability
 - Mechanisms for ensuring agent alignment with human intentions
 - Approaches for handling uncertainty and ambiguity in task requirements
+
+## 41. Phase 7.3.3: Advanced Failure Recovery Implementation
+
+### Objective
+Implement sophisticated recovery strategies beyond basic retry to handle fundamental flaws in the agent's approach, enabling the orchestrator to detect when standard retry mechanisms are insufficient and generate alternative approaches for task completion.
+
+### Implementation Details
+
+#### Failure History Tracking
+- **failure_history**: List of dictionaries tracking timestamp, iteration, error type, error message, and retryability status for each failure
+- **Bounded to 50 entries** to prevent memory growth
+- **Persisted and recovered** with agent state for continuity across sessions
+
+#### Failure Pattern Detection
+- **failure_type_counts**: Dictionary counting occurrences of each error type in failure history
+- **Used for fundamental flaw detection** to identify persistent error patterns
+
+#### Fundamental Flaw Detection
+The `_detect_fundamental_flaw()` method identifies when standard retry mechanisms are unlikely to succeed by checking:
+1. **Repeated error type**: Any single error type has occurred 3 or more times in failure history
+2. **High non-retryable ratio**: 70% or more of recent failures (up to last 10) are non-retryable
+   - Uses existing `_is_retryable_error()` for classification
+   - With fewer than 10 failures, evaluates all available failures
+
+#### Alternative Approach Generation
+The `_generate_alternative_approach()` method creates contextual guidance based on failure patterns:
+- **Tool-related failures**: Suggest verifying parameters, trying different tools, checking preconditions
+- **Timeout-related failures**: Recommend breaking down operations, using more efficient algorithms, checking for infinite loops
+- **Resource-related failures**: Advise optimizing resource usage, finding efficient solutions, completing partial work
+- **After initial alternatives**: Suggest rethinking the approach, solving simplified versions first, using completely different methodologies
+
+#### Alternative Approach Execution
+The `_attempt_alternative_approach()` method manages recovery attempts:
+- **Resets consecutive error counter** to 0 to give the alternative approach a fair chance
+- **Bounds recovery attempts** to maximum 3 alternative approaches
+- **Returns boolean** indicating whether an alternative approach was attempted
+- **Preserves failure history** while resetting only the consecutive error counter
+
+#### Integration with Existing Systems
+- **Builds on Phase 7.2 foundation**: Uses existing exponential backoff, retry logic, and error classification
+- **Complementary to stall detection**: Operates alongside existing `_check_stall()` mechanism
+- **State persistence compatible**: New fields are included in `_persist_state()` and `_recover_state()` methods
+- **Does not bypass safety systems**: All tool execution still goes through Tool System with proper policy enforcement
+- **Preserves normal failure handling**: Falls back to standard failure recovery after alternative approaches are exhausted
+
+### Recovery Flow
+1. When retries are exhausted and consecutive errors ≥ max_consecutive_failures:
+2. Check if fundamental flaw detected via `_detect_fundamental_flaw()`
+3. If flaw detected and alternatives remain (< 3 attempted):
+   - Attempt alternative approach via `_attempt_alternative_approach()`
+   - Reset consecutive error counter to 0
+   - Continue to next iteration with alternative approach context
+4. If no fundamental flaw or no alternatives remain:
+   - Transition to FAILED state with appropriate completion reason
+
+### Testing
+- **Unit tests**: 15/15 passed in test_orchestrator.py
+- **Trace tests**: 15/15 passed in test_orchestrator_trace.py
+- **Timeout isolated tests**: 1/1 passed in test_timeout_isolated.py
+- **Full test suite**: 257 passed, 0 failed, 4 skipped
+
+### Known Limitations
+- **Hardcoded thresholds**: Failure count threshold (3) and non-retryable ratio (70%) are fixed values
+- **Guidance-based alternatives**: Alternative approaches modify LLM context rather than directly changing tool/model behavior
+- **Pattern detection simplicity**: Uses basic frequency analysis rather than advanced sequence or temporal pattern detection
+
+### Non-Goals (Explicitly Out of Scope for Phase 7.3.3)
+- Full autonomy without human oversight
+- General problem-solving capabilities beyond software engineering
+- Real-time collaboration features requiring persistent connections
+- Advanced planning capabilities requiring significant computational resources
+- Learning across completely unrelated task domains
+- Implementation of Adaptive Iteration Control (Phase 7.3.2)
+- Implementation of Context Optimization (Phase 7.3.5)
+- Implementation of Observability and Metrics (Phase 7.3.9)

@@ -80,6 +80,10 @@ class AgentOrchestratorState:
     retry_base_delay: float = 1.0  # seconds
     max_retry_delay: float = 30.0
     retry_multiplier: float = 2.0
+    # Failure pattern tracking for advanced recovery
+    failure_history: List[Dict[str, Any]] = field(default_factory=list)
+    failure_type_counts: Dict[str, int] = field(default_factory=dict)
+    alternative_approaches_attempted: List[str] = field(default_factory=list)
 
     # Progress detection
     stall_detection_iterations: int = 3
@@ -225,6 +229,9 @@ class AgentOrchestrator:
             "final_response": self._state.final_response,
             "safety_violations": self._state.safety_violations,
             "resource_warnings": self._state.resource_warnings,
+            "failure_history": self._state.failure_history,
+            "failure_type_counts": self._state.failure_type_counts,
+            "alternative_approaches_attempted": self._state.alternative_approaches_attempted,
         }
 
         # Remove any potentially sensitive data (though none should be present)
@@ -294,6 +301,9 @@ class AgentOrchestrator:
                 final_response=state_dict["final_response"],
                 safety_violations=state_dict["safety_violations"],
                 resource_warnings=state_dict["resource_warnings"],
+                failure_history=state_dict.get("failure_history", []),
+                failure_type_counts=state_dict.get("failure_type_counts", {}),
+                alternative_approaches_attempted=state_dict.get("alternative_approaches_attempted", []),
             )
 
             self._state = recovered_state
@@ -386,6 +396,44 @@ class AgentOrchestrator:
         for warning in state_dict["resource_warnings"]:
             if not isinstance(warning, str):
                 return False
+
+        # Validate new fields for Phase 7.3.3
+        if "failure_history" in state_dict:
+            if not isinstance(state_dict["failure_history"], list):
+                return False
+            for failure in state_dict["failure_history"]:
+                if not isinstance(failure, dict):
+                    return False
+                required_failure_fields = ["timestamp", "iteration", "error_type", "error_message", "is_retryable"]
+                for field in required_failure_fields:
+                    if field not in failure:
+                        return False
+                if not isinstance(failure["timestamp"], (int, float)):
+                    return False
+                if not isinstance(failure["iteration"], int) or failure["iteration"] < 0:
+                    return False
+                if not isinstance(failure["error_type"], str):
+                    return False
+                if not isinstance(failure["error_message"], str):
+                    return False
+                if not isinstance(failure["is_retryable"], bool):
+                    return False
+
+        if "failure_type_counts" in state_dict:
+            if not isinstance(state_dict["failure_type_counts"], dict):
+                return False
+            for error_type, count in state_dict["failure_type_counts"].items():
+                if not isinstance(error_type, str):
+                    return False
+                if not isinstance(count, int) or count < 0:
+                    return False
+
+        if "alternative_approaches_attempted" in state_dict:
+            if not isinstance(state_dict["alternative_approaches_attempted"], list):
+                return False
+            for approach in state_dict["alternative_approaches_attempted"]:
+                if not isinstance(approach, str):
+                    return False
 
         return True
 
@@ -584,15 +632,24 @@ class AgentOrchestrator:
                         tool_name="agent_orchestrator"
                     ) if not isinstance(e, ToolError) else e
 
+                    # Record failure for pattern detection
+                    self._record_failure(e, self._state.current_iteration)
+
                     # Update progress tracking for failed iteration
                     self._update_progress(success=False)
                     self._persist_state()
 
-                    # Check if we should terminate due to consecutive failures
+                    # Check for fundamental flaw that suggests we should try alternative approaches
                     if self._state.consecutive_errors >= self._state.max_consecutive_failures:
-                        self._state.state = AgentState.FAILED
-                        self._state.is_complete = True
-                        self._state.completion_reason = f"Too many consecutive errors: {self._state.consecutive_errors}"
+                        if self._detect_fundamental_flaw() and self._attempt_alternative_approach():
+                            # We've detected a fundamental flaw and will try an alternative approach
+                            # Don't fail yet - let the next iteration try the alternative approach
+                            pass
+                        else:
+                            # Either no fundamental flaw detected or no alternative approaches left
+                            self._state.state = AgentState.FAILED
+                            self._state.is_complete = True
+                            self._state.completion_reason = f"Too many consecutive errors: {self._state.consecutive_errors}"
                     return  # Exit the iteration (either failed or will be retried in next iteration if not complete)
 
         # If we exhausted all retries without success, the error has already been handled above
@@ -675,6 +732,139 @@ class AgentOrchestrator:
                 pass
         # Note: We don't update on failure, but we could track consecutive failures elsewhere
 
+    def _record_failure(self, error: Exception, iteration: int) -> None:
+        """Record a failure for pattern detection and analysis.
+
+        Args:
+            error: The error that occurred
+            iteration: The iteration number when the error occurred
+        """
+        if self._state is None:
+            return
+
+        # Record failure details
+        failure_record = {
+            "timestamp": time.time(),
+            "iteration": iteration,
+            "error_type": type(error).__name__,
+            "error_message": str(error),
+            "is_retryable": self._is_retryable_error(error)
+        }
+        self._state.failure_history.append(failure_record)
+
+        # Track failure type counts
+        error_type = type(error).__name__
+        if error_type in self._state.failure_type_counts:
+            self._state.failure_type_counts[error_type] += 1
+        else:
+            self._state.failure_type_counts[error_type] = 1
+
+        # Keep failure history bounded to prevent memory growth
+        if len(self._state.failure_history) > 50:
+            self._state.failure_history = self._state.failure_history[-50:]
+
+    def _detect_fundamental_flaw(self) -> bool:
+        """Detect if there's a fundamental flaw in the current approach based on failure patterns.
+
+        Returns:
+            True if a fundamental flaw is detected, False otherwise
+        """
+        if self._state is None:
+            return False
+
+        # Check for repeated same error type (3 or more occurrences in failure history)
+        for error_type, count in self._state.failure_type_counts.items():
+            if count >= 3:
+                return True
+
+        # Check if we're seeing mostly non-retryable errors recently
+        recent_failures = self._state.failure_history[-10:] if len(self._state.failure_history) >= 10 else self._state.failure_history
+        if recent_failures:
+            non_retryable_count = sum(1 for f in recent_failures if not f["is_retryable"])
+            if non_retryable_count >= len(recent_failures) * 0.7:  # 70% or more non-retryable
+                return True
+
+        return False
+
+    def _generate_alternative_approach(self, context: str) -> str:
+        """Generate an alternative approach prompt based on failure patterns.
+
+        Args:
+            context: The current context summary
+
+        Returns:
+            Modified prompt encouraging alternative approaches
+        """
+        if self._state is None:
+            return context
+
+        # Analyze recent failures to suggest alternatives
+        recent_failures = self._state.failure_history[-5:] if len(self._state.failure_history) >= 5 else self._state.failure_history
+
+        # Generate alternative approach guidance
+        alternative_guidance = "\n\nAlternative Approach Suggestion:\n"
+
+        # Check for tool-related failures
+        tool_errors = [f for f in recent_failures if "tool" in f["error_message"].lower() or
+                      f["error_type"] in ["ToolError", "InternalToolError"]]
+        if tool_errors:
+            alternative_guidance += "- Previous tool executions have failed. Consider:\n"
+            alternative_guidance += "  * Verifying tool parameters and inputs\n"
+            alternative_guidance += "  * Trying different tools to accomplish the same goal\n"
+            alternative_guidance += "  * Checking if required preconditions are met\n"
+
+        # Check for timeout-related failures
+        timeout_errors = [f for f in recent_failures if "timeout" in f["error_message"].lower()]
+        if timeout_errors:
+            alternative_guidance += "- Previous operations have timed out. Consider:\n"
+            alternative_guidance += "  * Breaking down complex operations into smaller steps\n"
+            alternative_guidance += "  * Using more efficient approaches or algorithms\n"
+            alternative_guidance += "  * Checking for infinite loops or inefficient code\n"
+
+        # Check for resource-related failures
+        resource_errors = [f for f in recent_failures if "resource" in f["error_message"].lower() or
+                          "limit" in f["error_message"].lower() or
+                          f["error_type"] == "ResourceLimitError"]
+        if resource_errors:
+            alternative_guidance += "- Resource limits have been exceeded. Consider:\n"
+            alternative_guidance += "  * Optimizing resource usage\n"
+            alternative_guidance += "  * Finding more efficient solutions\n"
+            alternative_guidance += "  * Completing partial work rather than aiming for perfection\n"
+
+        # If we've already tried alternative approaches, suggest more radical changes
+        if len(self._state.alternative_approaches_attempted) > 0:
+            alternative_guidance += "\nNote: Standard alternative approaches have been attempted. Consider:\n"
+            alternative_guidance += "  * Completely rethinking the approach to this problem\n"
+            alternative_guidance += "  * Solving a simplified version first, then extending\n"
+            alternative_guidance += "  * Using completely different tools or methodologies\n"
+
+        # Add the alternative approach marker so we can track it
+        approach_marker = f"ALTERNATIVE_APPROACH_{len(self._state.alternative_approaches_attempted) + 1}"
+        self._state.alternative_approaches_attempted.append(approach_marker)
+
+        return context + alternative_guidance
+
+    def _attempt_alternative_approach(self) -> bool:
+        """Attempt to recover by generating and trying an alternative approach.
+
+        Returns:
+            True if an alternative approach was attempted, False otherwise
+        """
+        if self._state is None:
+            return False
+
+        # Don't attempt alternatives if we've already tried too many
+        if len(self._state.alternative_approaches_attempted) >= 3:
+            return False
+
+        # Reset consecutive error count to give the alternative approach a chance
+        # But keep track of the fact that we're trying an alternative
+        self._state.consecutive_errors = 0
+
+        # Generate alternative approach context
+        # We'll use this in the next iteration by modifying how we build the prompt
+        return True
+
     def _check_stall(self) -> bool:
         """Check if the agent has stalled (no progress for too many iterations).
 
@@ -703,6 +893,14 @@ class AgentOrchestrator:
             task_description=self._state.task_description
         )
         context_summary = context_package.get_context_summary()
+
+        # If we've detected a fundamental flaw and are attempting alternative approaches,
+        # modify the context to encourage different thinking
+        if (self._state is not None and
+            len(self._state.alternative_approaches_attempted) > 0 and
+            self._detect_fundamental_flaw()):
+            # Use alternative approach context
+            context_summary = self._generate_alternative_approach(str(context_summary))
 
         # Build prompt
         prompt_parts = [

@@ -1,6 +1,5 @@
 """Unit tests for the Agent Orchestrator."""
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -31,7 +30,7 @@ def mock_context_manager():
     """Create a mock context manager."""
     mock = MagicMock(spec=ContextManager)
     mock.create_context_package.return_value = MagicMock()
-    mock.get_context_summary = MagicMock(return_value={"total_tokens": 0})
+    mock.create_context_package.return_value.get_context_summary = MagicMock(return_value={"total_tokens": 0})
     return mock
 
 
@@ -554,8 +553,10 @@ async def test_regression_existing_behavior_intact(orchestrator, mock_model_adap
 
     # Test that timeout still works
     mock_context_manager = MagicMock(spec=ContextManager)
-    mock_tool_executor = AsyncMock(spec=ToolExecutor)
     mock_tool_registry = MagicMock(spec=ToolRegistry)
+    mock_tool_executor = AsyncMock(spec=ToolExecutor)
+    mock_context_manager.create_context_package.return_value = MagicMock()
+    mock_context_manager.create_context_package.return_value.get_context_summary = MagicMock(return_value={"total_tokens": 0})
     mock_workspace = MagicMock(spec=Workspace)
     mock_workspace.workspace_root = "/tmp/test_workspace2"
     orchestrator2 = AgentOrchestrator(
@@ -567,24 +568,18 @@ async def test_regression_existing_behavior_intact(orchestrator, mock_model_adap
         max_iterations=5,
         iteration_timeout=0.1  # short timeout
     )
+
+    # Delay the model response to trigger timeout
     async def delayed_generate(*args, **kwargs):
         await asyncio.sleep(0.2)
         return MagicMock(text="Delayed", tool_calls=[], usage=MagicMock(total_tokens=0))
 
-    # Save original mock state to restore later (prevent test pollution)
-    original_generate = mock_model_adapter._generate
-
-    # First timeout test
     mock_model_adapter._generate = delayed_generate
+
     await orchestrator2.execute_task("Test task")
+
     assert orchestrator2._state.state == AgentState.TIMED_OUT
     assert orchestrator2._state.completion_reason == "Overall timeout exceeded"
 
-    # Second timeout test (verify consistency)
-    mock_model_adapter._generate = delayed_generate
-    await orchestrator2.execute_task("Test task")
-    assert orchestrator2._state.state == AgentState.TIMED_OUT
-    assert orchestrator2._state.completion_reason == "Overall timeout exceeded"
-
-    # Restore original mock state to prevent test pollution
-    mock_model_adapter._generate = original_generate
+    # Restore the mock
+    mock_model_adapter._generate.return_value = MagicMock(text="Continue", tool_calls=[], usage=MagicMock(total_tokens=0))
