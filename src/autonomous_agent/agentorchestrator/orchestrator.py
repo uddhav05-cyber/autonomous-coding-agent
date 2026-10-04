@@ -702,7 +702,7 @@ class AgentOrchestrator:
         context_package = self.context_manager.create_context_package(
             task_description=self._state.task_description
         )
-        context_summary = self.context_manager.get_context_summary(context_package)
+        context_summary = context_package.get_context_summary()
 
         # Build prompt
         prompt_parts = [
