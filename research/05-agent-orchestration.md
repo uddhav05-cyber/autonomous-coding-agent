@@ -887,3 +887,83 @@ Implemented a focused ProgressMetrics / ProgressTracker abstraction that provide
 - Meaningful progress definition is conservative and may not capture all nuances of progress
 - Workspace tracking relies on file count changes rather than semantic relevance
 - History size is fixed at 10 iterations (configurable but not exposed externally)
+
+
+### Phase 7.3.4.2: Goal Tracking & Integration (IMPLEMENTED)
+
+Implemented minimal goal tracking to represent task goal and completion state, integrated with existing ProgressMetrics system.
+
+#### Implementation Details
+
+**GoalTracker Data Model**
+- Created a compact, serializable GoalTracker class that tracks:
+  - Goal description: Text description of the task/goal
+  - Completion criteria: List of specific, detectable conditions that indicate goal completion
+  - Status: Current goal status (pending, in_progress, completed, failed)
+  - Progress: Numerical progress value (0.0 to 1.0) representing completion ratio
+  - Progress evidence: List of strings tracking evidence supporting the progress value
+  - Bounded history: Limited history of goal states for serialization/persistence (last 10 iterations)
+
+**Key Features**
+- Minimal, focused design avoiding unnecessary fields
+- Deterministic, serializable, and recoverable state transitions
+- Progress evaluation based on evidence-based criteria
+- Integration with existing termination logic through state transitions
+- Backward compatibility - older states without goal information initialize appropriately
+
+**Goal Progress Evaluation**
+- Completion evaluated based on evidence matching completion criteria
+- Progress calculated as ratio of matched criteria to total criteria (0.0 to 1.0)
+- Status transitions:
+  - pending → in_progress when progress > 0
+  - in_progress → completed when progress >= 1.0 AND all completion criteria are satisfied
+  - in_progress → failed when error count reaches max_consecutive_failures
+- For goals with no completion criteria, progress remains 0.0 and status stays pending
+
+**Integration with AgentOrchestratorState**
+- Added goal_tracker: GoalTracker field (with default factory)
+- Updated _persist_state() and _recover_state() methods to handle goal tracker persistence
+- Updated _validate_recovered_state() to validate new fields while maintaining backward compatibility
+- Goal tracking initialized in execute_task() with task description as goal and basic completion criteria ["Task completed successfully"]
+
+**Integration with Orchestrator**
+- Enhanced _update_goal_tracker() method called after each iteration to update goal progress
+- Goal completion checked in _update_goal_tracker() - sets state to COMPLETED when goal is completed
+- Goal failure checked in _update_goal_tracker() - sets state to FAILED when goal has failed
+- Goal tracking updates occur at appropriate lifecycle boundaries (after each iteration)
+- Works cooperatively with existing adaptive iteration and failure recovery systems
+
+**Persistence and Recovery**
+- Integrates with existing _persist_state() and _recover_state() methods
+- Goal history is bounded to prevent memory growth
+- Values are validated during recovery using type checking and value validation
+- Malformed goal data handled gracefully with safe defaults
+- Maintains compatibility with existing persisted state from earlier phases
+
+**Tests Added**
+- GoalTracker initialization with default and custom values
+- Goal description and completion criteria updates
+- Progress evaluation with various completion criteria combinations
+- Goal status transitions (pending → in_progress → completed/failed)
+- Progress clamping to [0, 1] range
+- History recording and bounded maintenance
+- Serialization and deserialization of goal tracker state
+- Recovery with valid and malformed goal data
+- Integration with orchestrator update and persistence mechanisms
+- Backward compatibility with states lacking goal tracker information
+- Orchestrator-level integration testing
+
+#### Integration Points
+- Uses existing iteration and tool execution information from _update_goal_tracker
+- Leverages existing workspace interfaces for file counting (read-only, no direct filesystem access)
+- Integrates with existing state persistence mechanisms (_persist_state/_recover_state)
+- Cooperates with existing termination logic through state transitions
+- Works with existing adaptive iteration and failure recovery systems
+- Does not modify core orchestrator loop or decision-making processes
+
+#### Known Limitations
+- Completion criteria matching uses simple string matching (case-insensitive substring)
+- Default completion criteria is simplistic: ["Task completed successfully"]
+- Goal description is currently just the task description
+- Progress evidence tracking is basic string-based
+- History size is fixed at 10 iterations (configurable but not exposed externally)

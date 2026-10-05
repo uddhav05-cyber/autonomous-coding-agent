@@ -304,6 +304,187 @@ class ProgressMetrics:
         return instance
 
 
+class GoalStatus(Enum):
+    """Minimal status model for goal tracking."""
+    PENDING = auto()      # Goal has been set but not yet pursued
+    IN_PROGRESS = auto()  # Work is actively being done toward the goal
+    COMPLETED = auto()    # Goal has been successfully achieved
+    FAILED = auto()       # Goal has failed to be achieved
+
+
+@dataclass
+class GoalTracker:
+    """Tracks progress toward a specific goal with completion criteria.
+
+    The GoalTracker works alongside ProgressMetrics to provide goal-oriented
+    tracking without duplicating progress measurement logic.
+    """
+    # Goal definition
+    goal_description: str = ""
+    completion_criteria: List[str] = field(default_factory=list)
+
+    # Current status
+    status: GoalStatus = GoalStatus.PENDING
+
+    # Progress tracking (0.0 to 1.0)
+    progress: float = 0.0
+    progress_evidence: List[str] = field(default_factory=list)
+
+    # Historical data for tracking and serialization
+    _history: List['GoalTracker'] = field(default_factory=list)
+    _max_history_size: int = 10  # Keep last 10 updates for history
+
+    def update(self,
+               goal_description: str,
+               completion_criteria: List[str],
+               status: GoalStatus,
+               progress: float,
+               progress_evidence: List[str]) -> None:
+        """Update the goal tracker with current state.
+
+        Args:
+            goal_description: Description of the goal
+            completion_criteria: List of criteria that must be met for completion
+            status: Current status of the goal
+            progress: Progress value between 0.0 and 1.0
+            progress_evidence: List of evidence supporting the progress value
+        """
+        # Create new state instance
+        new_state = GoalTracker(
+            goal_description=goal_description,
+            completion_criteria=completion_criteria.copy(),
+            status=status,
+            progress=max(0.0, min(1.0, progress)),  # Clamp to [0,1]
+            progress_evidence=progress_evidence.copy(),
+            _max_history_size=self._max_history_size
+        )
+
+        # Copy history and add current state
+        new_state._history = self._history.copy()
+        new_state._history.append(new_state)
+
+        # Maintain bounded history size
+        if len(new_state._history) > self._max_history_size:
+            new_state._history = new_state._history[-self._max_history_size:]
+
+        # Update current instance with new values
+        self.goal_description = new_state.goal_description
+        self.completion_criteria = new_state.completion_criteria.copy()
+        self.status = new_state.status
+        self.progress = new_state.progress
+        self.progress_evidence = new_state.progress_evidence.copy()
+        self._history = new_state._history
+
+    def evaluate_completion(self, evidence: List[str]) -> Tuple[bool, float]:
+        """Evaluate goal completion based on provided evidence.
+
+        Args:
+            evidence: List of evidence items to evaluate against criteria
+
+        Returns:
+            Tuple of (is_complete, progress_score) where:
+            - is_complete: True if all criteria are satisfied
+            - progress_score: Progress value between 0.0 and 1.0 based on criteria satisfaction
+        """
+        if not self.completion_criteria:
+            # No criteria means we cannot determine completion
+            return False, 0.0
+
+        # Count how many criteria are satisfied by the evidence
+        satisfied_criteria = 0
+        for criterion in self.completion_criteria:
+            # Simple matching: criterion is satisfied if any evidence contains it
+            # In a more sophisticated implementation, this could use semantic matching
+            if any(criterion.lower() in evidence_item.lower() for evidence_item in evidence):
+                satisfied_criteria += 1
+
+        # Calculate progress as ratio of satisfied criteria
+        progress_score = satisfied_criteria / len(self.completion_criteria)
+        is_complete = satisfied_criteria == len(self.completion_criteria)
+
+        return is_complete, progress_score
+
+    def get_current_stats(self) -> Dict[str, Any]:
+        """Get current goal tracking statistics.
+
+        Returns:
+            Dictionary containing current goal tracking state
+        """
+        return {
+            "goal_description": self.goal_description,
+            "completion_criteria": self.completion_criteria.copy(),
+            "status": self.status.name,
+            "progress": self.progress,
+            "progress_evidence": self.progress_evidence.copy(),
+            "history_count": len(self._history)
+        }
+
+    def get_bounded_history(self) -> List[Dict[str, Any]]:
+        """Get bounded history as a list of dictionaries for serialization.
+
+        Returns:
+            List of goal tracker state dictionaries representing bounded history
+        """
+        return [
+            {
+                "goal_description": g.goal_description,
+                "completion_criteria": g.completion_criteria.copy(),
+                "status": g.status.name,
+                "progress": g.progress,
+                "progress_evidence": g.progress_evidence.copy()
+            }
+            for g in self._history
+        ]
+
+    @classmethod
+    def from_bounded_history(cls, history_data: List[Dict[str, Any]], max_history_size: int = 10) -> 'GoalTracker':
+        """Create GoalTracker instance from bounded history data.
+
+        Args:
+            history_data: List of goal tracker state dictionaries
+            max_history_size: Maximum size for history
+
+        Returns:
+            GoalTracker instance with restored history
+        """
+        if not history_data:
+            return cls(_max_history_size=max_history_size)
+
+        # Create instance
+        instance = cls(_max_history_size=max_history_size)
+        instance._history = []
+
+        # Recreate goal tracker states from history data
+        for data in history_data:
+            # Convert status string back to enum
+            status_enum = GoalStatus[data["status"]]
+
+            state = GoalTracker(
+                goal_description=data["goal_description"],
+                completion_criteria=data["completion_criteria"].copy(),
+                status=status_enum,
+                progress=data["progress"],
+                progress_evidence=data["progress_evidence"].copy(),
+                _max_history_size=max_history_size
+            )
+            instance._history.append(state)
+
+        # Ensure we don't exceed max history size
+        if len(instance._history) > max_history_size:
+            instance._history = instance._history[-max_history_size:]
+
+        # Set current state to the last entry if available
+        if instance._history:
+            last = instance._history[-1]
+            instance.goal_description = last.goal_description
+            instance.completion_criteria = last.completion_criteria.copy()
+            instance.status = last.status
+            instance.progress = last.progress
+            instance.progress_evidence = last.progress_evidence.copy()
+
+        return instance
+
+
 class AgentState(Enum):
     """Possible states of the agent orchestrator."""
     PENDING = auto()      # Initial state, task not started
@@ -357,6 +538,8 @@ class AgentOrchestratorState:
     last_workspace_file_count: int = 0
     # Progress metrics tracking (Phase 7.3.4.1)
     progress_metrics: ProgressMetrics = field(default_factory=ProgressMetrics)
+    # Goal tracking (Phase 7.3.4.2)
+    goal_tracker: GoalTracker = field(default_factory=GoalTracker)
     # Previous iteration counters for calculating per-iteration deltas
     prev_total_tool_calls: int = 0
     prev_error_count: int = 0
@@ -509,6 +692,9 @@ class AgentOrchestrator:
             # Progress metrics tracking (Phase 7.3.4.1)
             "progress_metrics_history": self._state.progress_metrics.get_bounded_history(),
             "progress_metrics_max_size": self._state.progress_metrics._max_history_size,
+            # Goal tracking (Phase 7.3.4.2)
+            "goal_tracker_history": self._state.goal_tracker.get_bounded_history(),
+            "goal_tracker_max_size": self._state.goal_tracker._max_history_size,
             # Previous iteration counters for calculating per-iteration deltas
             "prev_total_tool_calls": self._state.prev_total_tool_calls,
             "prev_error_count": self._state.prev_error_count,
@@ -604,6 +790,11 @@ class AgentOrchestrator:
                 progress_metrics=ProgressMetrics.from_bounded_history(
                     state_dict.get("progress_metrics_history", []),
                     state_dict.get("progress_metrics_max_size", 10)
+                ),
+                # Goal tracking (Phase 7.3.4.2)
+                goal_tracker=GoalTracker.from_bounded_history(
+                    state_dict.get("goal_tracker_history", []),
+                    state_dict.get("goal_tracker_max_size", 10)
                 ),
                 # Previous iteration counters for calculating per-iteration deltas
                 prev_total_tool_calls=state_dict.get("prev_total_tool_calls", 0),
@@ -780,6 +971,48 @@ class AgentOrchestrator:
             if not isinstance(state_dict["prev_workspace_file_count"], int) or state_dict["prev_workspace_file_count"] < 0:
                 return False
 
+        # Validate goal tracking fields (Phase 7.3.4.2) - optional for backward compatibility
+        if "goal_tracker_history" in state_dict:
+            if not isinstance(state_dict["goal_tracker_history"], list):
+                return False
+            for goal_state in state_dict["goal_tracker_history"]:
+                if not isinstance(goal_state, dict):
+                    return False
+                # Check that each goal state has the expected fields
+                expected_fields = ["goal_description", "completion_criteria", "status", "progress", "progress_evidence"]
+                for field in expected_fields:
+                    if field not in goal_state:
+                        return False
+                    # Validate each field according to its expected type
+                    if field == "goal_description":
+                        if not isinstance(goal_state[field], str):
+                            return False
+                    elif field == "completion_criteria":
+                        if not isinstance(goal_state[field], list):
+                            return False
+                        for item in goal_state[field]:
+                            if not isinstance(item, str):
+                                return False
+                    elif field == "status":
+                        if not isinstance(goal_state[field], str):
+                            return False
+                        # Validate status is a valid GoalStatus
+                        if goal_state[field] not in [s.name for s in GoalStatus]:
+                            return False
+                    elif field == "progress":
+                        if not isinstance(goal_state[field], (int, float)) or goal_state[field] < 0 or goal_state[field] > 1:
+                            return False
+                    elif field == "progress_evidence":
+                        if not isinstance(goal_state[field], list):
+                            return False
+                        for evidence in goal_state[field]:
+                            if not isinstance(evidence, str):
+                                return False
+
+        if "goal_tracker_max_size" in state_dict:
+            if not isinstance(state_dict["goal_tracker_max_size"], int) or state_dict["goal_tracker_max_size"] <= 0:
+                return False
+
         return True
 
     async def execute_task(self, task_description: str) -> AgentOrchestratorState:
@@ -816,6 +1049,11 @@ class AgentOrchestrator:
                 prev_error_count=0,
                 prev_workspace_file_count=0
             )
+            # Initialize goal tracking with the task description as the goal
+            self._state.goal_tracker.goal_description = task_description
+            # Set initial completion criteria based on the task
+            # For now, we'll use a simple criterion: task completion
+            self._state.goal_tracker.completion_criteria = ["Task completed successfully"]
             self._state.state = AgentState.RUNNING
             self._state.start_time = time.time()
             self._state.last_activity_time = self._state.start_time
@@ -838,6 +1076,9 @@ class AgentOrchestrator:
 
                 # Execute one iteration
                 await self._execute_iteration()
+
+                # Update goal tracker based on iteration results
+                self._update_goal_tracker()
 
                 # Check if we should continue
                 if self._state.is_complete:
@@ -974,29 +1215,31 @@ class AgentOrchestrator:
                 await self._process_tool_results(tool_results)
 
                 # Step 8: Update execution history with results
-                call_data = {}
-                result_data = {}
-                # Safely extract data from tool call and result for JSON serialization
-                if hasattr(call, 'dict'):
-                    try:
-                        call_data = call.dict()
-                    except Exception:
-                        call_data = str(call)
-                else:
-                    call_data = str(call)
+                for call, result in zip(validated_tool_calls, tool_results):
+                    # Safely extract data from tool call and result for JSON serialization
+                    call_data = {}
+                    result_data = {}
 
-                if hasattr(result, 'dict'):
-                    try:
-                        result_data = result.dict()
-                    except Exception:
-                        result_data = str(result)
-                else:
-                    result_data = str(result)
+                    # Extract call data
+                    if hasattr(call, 'name') and hasattr(call, 'arguments'):
+                        call_data = {
+                            "name": call.name,
+                            "arguments": call.arguments if isinstance(call.arguments, dict) else str(call.arguments)
+                        }
+                    else:
+                        call_data = {"raw_call": str(call)}
 
-                self._state.tool_call_history.extend([
-                    {"call": call_data, "result": result_data}
-                    for call, result in zip(validated_tool_calls, tool_results)
-                ])
+                    # Extract result data
+                    if hasattr(result, 'success') and hasattr(result, 'data') and hasattr(result, 'error'):
+                        result_data = {
+                            "success": result.success,
+                            "data": str(result.data) if result.data is not None else None,
+                            "error": str(result.error) if result.error is not None else None
+                        }
+                    else:
+                        result_data = {"raw_result": str(result)}
+
+                    self._state.tool_call_history.append({"call": call_data, "result": result_data})
 
                 # If we succeeded, update progress tracking and break out of retry loop
                 self._update_progress(success=True)
@@ -1141,8 +1384,112 @@ class AgentOrchestrator:
         # Debug print
         print(f"DEBUG: Iteration {self._state.current_iteration}, successful_tool_calls={successful_tool_calls}, total_tool_calls={self._state.total_tool_calls}, prev_total_tool_calls={self._state.prev_total_tool_calls}")
 
-        # Debug print
-        # print(f"DEBUG: Iteration {self._state.current_iteration}, successful_tool_calls={successful_tool_calls}, total_tool_calls={self._state.total_tool_calls}, prev_total_tool_calls={self._state.prev_total_tool_calls}")
+    def _update_goal_tracker(self) -> None:
+        """Update goal tracker based on iteration results.
+
+        This method evaluates progress toward the goal based on the outcomes
+        of the current iteration and updates the goal tracker accordingly.
+        """
+        if self._state is None:
+            return
+
+        # Gather information from the current iteration
+        successful_tool_calls = self._state.total_tool_calls - self._state.prev_total_tool_calls
+        failed_tool_calls = self._state.error_count - self._state.prev_error_count
+
+        # Calculate workspace changes
+        try:
+            if os.path.exists(str(self.workspace.workspace_root)):
+                workspace_file_count = sum(len(files) for _, _, files in os.walk(str(self.workspace.workspace_root)))
+            else:
+                workspace_file_count = 0
+        except Exception:
+            workspace_file_count = 0
+
+        workspace_file_count_delta = workspace_file_count - self._state.prev_workspace_file_count
+
+        # Determine goal progress based on iteration outcomes
+        # For now, we'll use a simple heuristic:
+        # - Successful tool calls indicate progress toward the goal
+        # - Failed tool calls or errors indicate lack of progress or regression
+        # - Positive workspace changes indicate forward progress
+
+        progress_increment = 0.0
+        progress_evidence = []
+
+        # Evidence of forward progress
+        if successful_tool_calls > 0:
+            progress_increment += 0.3 * min(successful_tool_calls, 5) / 5  # Up to 0.3 for successful tool calls
+            progress_evidence.append(f"{successful_tool_calls} successful tool calls")
+
+        if workspace_file_count_delta > 0:
+            progress_increment += 0.2 * min(workspace_file_count_delta, 10) / 10  # Up to 0.2 for workspace growth
+            progress_evidence.append(f"+{workspace_file_count_delta} workspace files")
+
+        # Evidence of lack of progress or regression
+        if failed_tool_calls > 0:
+            # Failed tool calls don't necessarily mean no progress, but they reduce confidence
+            progress_increment -= 0.1 * min(failed_tool_calls, 5) / 5  # Down to -0.1 for failed tool calls
+            progress_evidence.append(f"{failed_tool_calls} failed tool calls (reduces confidence)")
+
+        if workspace_file_count_delta < 0:
+            progress_increment -= 0.1 * min(abs(workspace_file_count_delta), 10) / 10  # Down to -0.1 for file loss
+            progress_evidence.append(f"{abs(workspace_file_count_delta)} workspace files lost")
+
+        if self._state.error_count > self._state.prev_error_count:
+            progress_increment -= 0.2 * min(self._state.error_count - self._state.prev_error_count, 5) / 5  # Down to -0.2 for new errors
+            progress_evidence.append(f"{self._state.error_count - self._state.prev_error_count} new errors")
+
+        # Ensure progress stays in [0, 1] range
+        new_progress = max(0.0, min(1.0, self._state.goal_tracker.progress + progress_increment))
+
+        # Determine goal status based on progress and completion criteria
+        new_status = self._state.goal_tracker.status
+        goal_just_completed = False
+        goal_just_failed = False
+
+        if new_progress >= 1.0:
+            # Check if we have satisfied the completion criteria
+            evidence_for_evaluation = []
+            if successful_tool_calls > 0:
+                evidence_for_evaluation.append(f"Successful tool calls: {successful_tool_calls}")
+            if workspace_file_count_delta > 0:
+                evidence_for_evaluation.append(f"Workspace growth: +{workspace_file_count_delta}")
+
+            is_complete, _ = self._state.goal_tracker.evaluate_completion(evidence_for_evaluation)
+            if is_complete:
+                new_status = GoalStatus.COMPLETED
+                goal_just_completed = True
+        elif self._state.error_count >= self._state.max_consecutive_failures:
+            # Too many consecutive errors indicates failure
+            new_status = GoalStatus.FAILED
+            goal_just_failed = True
+        elif successful_tool_calls > 0 or workspace_file_count_delta > 0:
+            # Any forward progress means we're in progress
+            new_status = GoalStatus.IN_PROGRESS
+        # Otherwise, we remain in the current status (PENDING or IN_PROGRESS)
+
+        # Update the goal tracker
+        self._state.goal_tracker.update(
+            goal_description=self._state.goal_tracker.goal_description,
+            completion_criteria=self._state.goal_tracker.completion_criteria,
+            status=new_status,
+            progress=new_progress,
+            progress_evidence=progress_evidence.copy()
+        )
+
+        # If goal tracker indicates completion or failure, and we're not already in a terminal state,
+        # update the orchestrator's state to follow the goal tracker (but don't override TIMED_OUT or CANCELLED)
+        if goal_just_completed and self._state.state not in [AgentState.TIMED_OUT, AgentState.CANCELLED]:
+            self._state.state = AgentState.COMPLETED
+            self._state.is_complete = True
+            if not self._state.completion_reason:
+                self._state.completion_reason = "Goal completed successfully"
+        elif goal_just_failed and self._state.state not in [AgentState.TIMED_OUT, AgentState.CANCELLED]:
+            self._state.state = AgentState.FAILED
+            self._state.is_complete = True
+            if not self._state.completion_reason:
+                self._state.completion_reason = "Goal failed to be achieved"
 
     def _check_stall(self) -> bool:
         """Check if the orchestrator has stalled (no progress for too many iterations).
@@ -1479,7 +1826,7 @@ Please provide the next steps to accomplish the task. If the task is complete, i
                 "tool_name": f"tool_{i}",  # In reality, we'd have the actual tool name
                 "success": result.success,
                 "has_error": result.error is not None,
-                "data_type": type(result.data).__name__ if result.data is not None else "None"
+                "data_type": str(type(result.data).__name__) if result.data is not None else "None"
             }
             self._state.tool_result_history.append(result_record)
 

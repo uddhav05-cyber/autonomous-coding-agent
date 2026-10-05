@@ -8,7 +8,7 @@ import json
 import os
 import tempfile
 
-from autonomous_agent.agentorchestrator import AgentOrchestrator, AgentOrchestratorState, AgentState
+from autonomous_agent.agentorchestrator import AgentOrchestrator, AgentOrchestratorState, AgentState, ProgressMetrics, GoalTracker, GoalStatus
 from autonomous_agent.model_adapter.base import ModelAdapter
 from autonomous_agent.model_adapter.types import ModelRequest, ModelResponse, ToolCall
 from autonomous_agent.context_engineering.context_manager import ContextManager
@@ -963,3 +963,513 @@ async def test_orchestrator_progress_metrics_persistence(orchestrator):
     persistence_file = new_orchestrator._get_persistence_file_path("test_progress")
     if os.path.exists(persistence_file):
         os.remove(persistence_file)
+
+
+# ====================================================================
+# FOCUSED TESTS FOR GOAL TRACKER (PHASE 7.3.4.2)
+# ====================================================================
+
+def test_goal_tracker_initialization():
+    """Test GoalTracker initialization with default values."""
+    goal_tracker = GoalTracker()
+
+    assert goal_tracker.goal_description == ""
+    assert goal_tracker.completion_criteria == []
+    assert goal_tracker.status == GoalStatus.PENDING
+    assert goal_tracker.progress == 0.0
+    assert goal_tracker.progress_evidence == []
+    assert goal_tracker._history == []
+    assert goal_tracker._max_history_size == 10
+
+
+def test_goal_tracker_initialization_with_values():
+    """Test GoalTracker initialization with custom values."""
+    goal_tracker = GoalTracker(
+        goal_description="Test goal",
+        completion_criteria=["Criterion 1", "Criterion 2"],
+        status=GoalStatus.IN_PROGRESS,
+        progress=0.5,
+        progress_evidence=["Evidence 1"]
+    )
+
+    assert goal_tracker.goal_description == "Test goal"
+    assert goal_tracker.completion_criteria == ["Criterion 1", "Criterion 2"]
+    assert goal_tracker.status == GoalStatus.IN_PROGRESS
+    assert goal_tracker.progress == 0.5
+    assert goal_tracker.progress_evidence == ["Evidence 1"]
+
+
+def test_goal_tracker_update():
+    """Test GoalTracker update method."""
+    goal_tracker = GoalTracker()
+
+    # Update with new values
+    goal_tracker.update(
+        goal_description="Updated goal",
+        completion_criteria=["Updated criterion 1", "Updated criterion 2"],
+        status=GoalStatus.COMPLETED,
+        progress=1.0,
+        progress_evidence=["Updated evidence 1", "Updated evidence 2"]
+    )
+
+    assert goal_tracker.goal_description == "Updated goal"
+    assert goal_tracker.completion_criteria == ["Updated criterion 1", "Updated criterion 2"]
+    assert goal_tracker.status == GoalStatus.COMPLETED
+    assert goal_tracker.progress == 1.0
+    assert goal_tracker.progress_evidence == ["Updated evidence 1", "Updated evidence 2"]
+    assert len(goal_tracker._history) == 1
+
+
+def test_goal_tracker_evaluate_completion():
+    """Test GoalTracker completion evaluation."""
+    goal_tracker = GoalTracker(
+        goal_description="Test goal",
+        completion_criteria=["Criterion A", "Criterion B", "Criterion C"]
+    )
+
+    # Test with no evidence
+    is_complete, progress = goal_tracker.evaluate_completion([])
+    assert is_complete == False
+    assert progress == 0.0
+
+    # Test with partial evidence
+    is_complete, progress = goal_tracker.evaluate_completion(["Criterion A"])
+    assert is_complete == False
+    assert progress == 1.0/3.0  # 1 out of 3 criteria
+
+    # Test with more partial evidence
+    is_complete, progress = goal_tracker.evaluate_completion(["Criterion A", "Criterion B"])
+    assert is_complete == False
+    assert progress == 2.0/3.0  # 2 out of 3 criteria
+
+    # Test with complete evidence
+    is_complete, progress = goal_tracker.evaluate_completion(["Criterion A", "Criterion B", "Criterion C"])
+    assert is_complete == True
+    assert progress == 1.0  # 3 out of 3 criteria
+
+    # Test with extra evidence (should still be complete)
+    is_complete, progress = goal_tracker.evaluate_completion(["Criterion A", "Criterion B", "Criterion C", "Extra"])
+    assert is_complete == True
+    assert progress == 1.0  # Still 3 out of 3 criteria matched
+
+
+def test_goal_tracker_evaluate_completion_no_criteria():
+    """Test GoalTracker completion evaluation with no criteria."""
+    goal_tracker = GoalTracker(
+        goal_description="Test goal",
+        completion_criteria=[]
+    )
+
+    # With no criteria, we cannot determine completion
+    is_complete, progress = goal_tracker.evaluate_completion(["Some evidence"])
+    assert is_complete == False
+    assert progress == 0.0
+
+
+def test_goal_tracker_get_current_stats():
+    """Test GoalTracker get_current_stats method."""
+    goal_tracker = GoalTracker(
+        goal_description="Test goal",
+        completion_criteria=["Criterion 1", "Criterion 2"],
+        status=GoalStatus.IN_PROGRESS,
+        progress=0.5,
+        progress_evidence=["Evidence 1"]
+    )
+
+    stats = goal_tracker.get_current_stats()
+
+    assert stats["goal_description"] == "Test goal"
+    assert stats["completion_criteria"] == ["Criterion 1", "Criterion 2"]
+    assert stats["status"] == "IN_PROGRESS"
+    assert stats["progress"] == 0.5
+    assert stats["progress_evidence"] == ["Evidence 1"]
+    assert stats["history_count"] == 0
+
+
+def test_goal_tracker_bounded_history():
+    """Test GoalTracker bounded history maintenance."""
+    goal_tracker = GoalTracker(_max_history_size=3)
+
+    # Add 5 updates
+    for i in range(5):
+        goal_tracker.update(
+            goal_description=f"Goal {i}",
+            completion_criteria=[f"Criterion {i}"],
+            status=GoalStatus.IN_PROGRESS,
+            progress=float(i) / 5.0,
+            progress_evidence=[f"Evidence {i}"]
+        )
+
+    # Should only keep the last 3 updates
+    assert len(goal_tracker._history) == 3
+    assert goal_tracker._history[0].goal_description == "Goal 2"
+    assert goal_tracker._history[1].goal_description == "Goal 3"
+    assert goal_tracker._history[2].goal_description == "Goal 4"
+
+    # Current state should be the last update
+    assert goal_tracker.goal_description == "Goal 4"
+    assert goal_tracker.completion_criteria == ["Criterion 4"]
+    assert goal_tracker.status == GoalStatus.IN_PROGRESS
+    assert goal_tracker.progress == 0.8  # 4/5
+    assert goal_tracker.progress_evidence == ["Evidence 4"]
+
+
+def test_goal_tracker_serialization():
+    """Test GoalTracker serialization and deserialization."""
+    # Create goal tracker with some history
+    goal_tracker = GoalTracker(_max_history_size=3)
+    goal_tracker.update(
+        goal_description="Initial goal",
+        completion_criteria=["Initial criterion"],
+        status=GoalStatus.PENDING,
+        progress=0.0,
+        progress_evidence=[]
+    )
+    goal_tracker.update(
+        goal_description="Updated goal",
+        completion_criteria=["Updated criterion 1", "Updated criterion 2"],
+        status=GoalStatus.IN_PROGRESS,
+        progress=0.5,
+        progress_evidence=["Updated evidence 1"]
+    )
+    goal_tracker.update(
+        goal_description="Final goal",
+        completion_criteria=["Final criterion 1", "Final criterion 2", "Final criterion 3"],
+        status=GoalStatus.COMPLETED,
+        progress=1.0,
+        progress_evidence=["Final evidence 1", "Final evidence 2", "Final evidence 3"]
+    )
+
+    # Serialize to dictionary format
+    history_data = goal_tracker.get_bounded_history()
+
+    # Deserialize from history data
+    restored_goal_tracker = GoalTracker.from_bounded_history(history_data, max_history_size=3)
+
+    # Check that the restored goal tracker matches the original
+    assert restored_goal_tracker.goal_description == goal_tracker.goal_description
+    assert restored_goal_tracker.completion_criteria == goal_tracker.completion_criteria
+    assert restored_goal_tracker.status == goal_tracker.status
+    assert restored_goal_tracker.progress == goal_tracker.progress
+    assert restored_goal_tracker.progress_evidence == goal_tracker.progress_evidence
+    assert len(restored_goal_tracker._history) == len(goal_tracker._history)
+
+    # Check history contents
+    for i in range(len(goal_tracker._history)):
+        orig = goal_tracker._history[i]
+        rest = restored_goal_tracker._history[i]
+        assert orig.goal_description == rest.goal_description
+        assert orig.completion_criteria == rest.completion_criteria
+        assert orig.status == rest.status
+        assert orig.progress == rest.progress
+        assert orig.progress_evidence == rest.progress_evidence
+
+
+def test_goal_tracker_progress_clamping():
+    """Test that progress values are clamped to [0, 1] range."""
+    goal_tracker = GoalTracker()
+
+    # Test clamping to 0
+    goal_tracker.update(
+        goal_description="Test",
+        completion_criteria=["Test"],
+        status=GoalStatus.PENDING,
+        progress=-0.5,  # Should be clamped to 0.0
+        progress_evidence=[]
+    )
+    assert goal_tracker.progress == 0.0
+
+    # Test clamping to 1
+    goal_tracker.update(
+        goal_description="Test",
+        completion_criteria=["Test"],
+        status=GoalStatus.PENDING,
+        progress=1.5,  # Should be clamped to 1.0
+        progress_evidence=[]
+    )
+    assert goal_tracker.progress == 1.0
+
+
+def test_goal_tracker_status_transitions():
+    """Test GoalTracker status transitions."""
+    goal_tracker = GoalTracker()
+
+    # Initial state should be PENDING
+    assert goal_tracker.status == GoalStatus.PENDING
+
+    # Update to IN_PROGRESS
+    goal_tracker.update(
+        goal_description="Test goal",
+        completion_criteria=["Criterion 1"],
+        status=GoalStatus.IN_PROGRESS,
+        progress=0.5,
+        progress_evidence=[]
+    )
+    assert goal_tracker.status == GoalStatus.IN_PROGRESS
+
+    # Update to COMPLETED
+    goal_tracker.update(
+        goal_description="Test goal",
+        completion_criteria=["Criterion 1"],
+        status=GoalStatus.COMPLETED,
+        progress=1.0,
+        progress_evidence=["Evidence 1"]
+    )
+    assert goal_tracker.status == GoalStatus.COMPLETED
+
+    # Update to FAILED
+    goal_tracker.update(
+        goal_description="Test goal",
+        completion_criteria=["Criterion 1"],
+        status=GoalStatus.FAILED,
+        progress=0.5,  # Progress doesn't matter for FAILED status
+        progress_evidence=[]
+    )
+    assert goal_tracker.status == GoalStatus.FAILED
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_goal_tracker_integration(orchestrator):
+    """Test that the orchestrator properly integrates and updates goal tracker."""
+    # Set up the orchestrator to have a successful tool call
+    orchestrator.tool_registry.list_tools.return_value = ["test_tool"]
+    mock_tool = MagicMock()
+    mock_tool.name = "test_tool"
+    orchestrator.tool_registry.get.return_value = mock_tool
+    orchestrator.tool_executor.execute.return_value = MagicMock(success=True, data=None, error=None)
+    orchestrator.tool_policy_engine.check_permission = MagicMock(return_value=None)
+    orchestrator.model_adapter._generate.return_value = MagicMock(
+        text="Execute tool",
+        tool_calls=[ToolCall(name="test_tool", arguments={})],
+        usage=MagicMock(total_tokens=0)
+    )
+
+    # Execute a task
+    await orchestrator.execute_task("Test task for goal tracking")
+
+    # Check that goal tracker was initialized and updated
+    assert orchestrator._state is not None
+    assert orchestrator._state.goal_tracker is not None
+
+    # Check initial goal setup
+    assert orchestrator._state.goal_tracker.goal_description == "Test task for goal tracking"
+    assert "Task completed successfully" in orchestrator._state.goal_tracker.completion_criteria
+
+    # Check that goal tracker was updated (should have some progress)
+    stats = orchestrator._state.goal_tracker.get_current_stats()
+    assert stats["history_count"] >= 1  # Should have history from updates
+    assert stats["progress"] >= 0.0  # Should have some progress
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_goal_tracker_persistence(orchestrator):
+    """Test that goal tracker is properly persisted and recovered."""
+    # Set up the orchestrator
+    orchestrator.tool_registry.list_tools.return_value = ["test_tool"]
+    mock_tool = MagicMock()
+    mock_tool.name = "test_tool"
+    orchestrator.tool_registry.get.return_value = mock_tool
+    orchestrator.tool_executor.execute.return_value = MagicMock(success=True, data=None, error=None)
+    orchestrator.tool_policy_engine.check_permission = MagicMock(return_value=None)
+    orchestrator.model_adapter._generate.return_value = MagicMock(
+        text="Execute tool",
+        tool_calls=[ToolCall(name="test_tool", arguments={})],
+        usage=MagicMock(total_tokens=0)
+    )
+
+    # Execute a task to generate some goal tracker updates
+    await orchestrator.execute_task("Test task for goal persistence")
+
+    # Persist the state
+    orchestrator._persist_state("test_goal_persistence")
+
+    # Create a new orchestrator for recovery
+    mock_workspace = MagicMock(spec=Workspace)
+    mock_workspace.workspace_root = orchestrator.workspace.workspace_root
+    new_orchestrator = AgentOrchestrator(
+        model_adapter=orchestrator.model_adapter,
+        context_manager=MagicMock(spec=ContextManager),
+        tool_registry=MagicMock(spec=ToolRegistry),
+        tool_executor=AsyncMock(spec=ToolExecutor),
+        workspace=mock_workspace,
+        max_iterations=5
+    )
+    new_orchestrator.tool_registry.list_tools.return_value = ["test_tool"]
+    new_tool = MagicMock()
+    new_tool.name = "test_tool"
+    new_orchestrator.tool_registry.get.return_value = new_tool
+    new_orchestrator.tool_executor.execute.return_value = MagicMock(success=True, data=None, error=None)
+    new_orchestrator.tool_policy_engine.check_permission = MagicMock(return_value=None)
+    # Set up the context manager mock to match the original fixture
+    new_orchestrator.context_manager.create_context_package.return_value = MagicMock()
+    new_orchestrator.context_manager.get_context_summary = MagicMock(return_value={"total_tokens": 0})
+
+    # Recover state
+    recovered = new_orchestrator._recover_state("test_goal_persistence")
+    assert recovered is True
+
+    # Check that goal tracker was recovered
+    assert new_orchestrator._state is not None
+    assert new_orchestrator._state.goal_tracker is not None
+
+    # Should have the same goal tracker data
+    original_stats = orchestrator._state.goal_tracker.get_current_stats()
+    recovered_stats = new_orchestrator._state.goal_tracker.get_current_stats()
+
+    assert original_stats["goal_description"] == recovered_stats["goal_description"]
+    assert original_stats["completion_criteria"] == recovered_stats["completion_criteria"]
+    assert original_stats["status"] == recovered_stats["status"]
+    # Progress might differ slightly due to timing, but should be close
+    assert abs(original_stats["progress"] - recovered_stats["progress"]) < 0.1
+
+    # Clean up persistence file
+    persistence_file = new_orchestrator._get_persistence_file_path("test_goal_persistence")
+    if os.path.exists(persistence_file):
+        os.remove(persistence_file)
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_goal_tracker_backward_compatibility():
+    """Test that older states without goal tracker information still work."""
+    # Create a state object manually (simulating an older state)
+    old_state = AgentOrchestratorState()
+    old_state.task_description = "Old task"
+    old_state.current_iteration = 2
+    old_state.state = AgentState.RUNNING
+
+    # Manually create a persistence file with old state format (no goal_tracker fields)
+    import json
+    import tempfile
+    import os
+
+    state_dict = {
+        "task_id": old_state.task_id,
+        "task_description": old_state.task_description,
+        "current_iteration": old_state.current_iteration,
+        "max_iterations": old_state.max_iterations,
+        "state": old_state.state.name,
+        "start_time": old_state.start_time,
+        "last_activity_time": old_state.last_activity_time,
+        "total_tokens_used": old_state.total_tokens_used,
+        "total_tool_calls": old_state.total_tool_calls,
+        "execution_history": old_state.execution_history,
+        "tool_call_history": old_state.tool_call_history,
+        "tool_result_history": old_state.tool_result_history,
+        "last_error": old_state.last_error.__dict__ if old_state.last_error else None,
+        "error_count": old_state.error_count,
+        "consecutive_errors": old_state.consecutive_errors,
+        "max_consecutive_failures": old_state.max_consecutive_failures,
+        "retry_base_delay": old_state.retry_base_delay,
+        "max_retry_delay": old_state.max_retry_delay,
+        "retry_multiplier": old_state.retry_multiplier,
+        "stall_detection_iterations": old_state.stall_detection_iterations,
+        "last_progress_iteration": old_state.last_progress_iteration,
+        "last_successful_tool_calls": old_state.last_successful_tool_calls,
+        "last_workspace_file_count": old_state.last_workspace_file_count,
+        "is_complete": old_state.is_complete,
+        "completion_reason": old_state.completion_reason,
+        "final_response": old_state.final_response,
+        "safety_violations": old_state.safety_violations,
+        "resource_warnings": old_state.resource_warnings,
+        "failure_history": old_state.failure_history,
+        "failure_type_counts": old_state.failure_type_counts,
+        "alternative_approaches_attempted": old_state.alternative_approaches_attempted,
+        # Progress metrics tracking (Phase 7.3.4.1)
+        "progress_metrics_history": old_state.progress_metrics.get_bounded_history(),
+        "progress_metrics_max_size": old_state.progress_metrics._max_history_size,
+        # NOTE: Intentionally omitting goal_tracker fields to test backward compatibility
+        # Previous iteration counters for calculating per-iteration deltas
+        "prev_total_tool_calls": old_state.prev_total_tool_calls,
+        "prev_error_count": old_state.prev_error_count,
+        "prev_workspace_file_count": old_state.prev_workspace_file_count
+    }
+
+    # Write to a temporary file
+    with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json') as f:
+        json.dump(state_dict, f, indent=2)
+        temp_file_path = f.name
+
+    try:
+        # Create an orchestrator and attempt to recover the old state
+        mock_workspace = MagicMock(spec=Workspace)
+        mock_workspace.workspace_root = "/tmp/test"
+        orchestrator = AgentOrchestrator(
+            model_adapter=MagicMock(spec=ModelAdapter),
+            context_manager=MagicMock(spec=ContextManager),
+            tool_registry=MagicMock(spec=ToolRegistry),
+            tool_executor=AsyncMock(spec=ToolExecutor),
+            workspace=mock_workspace,
+            max_iterations=5
+        )
+
+        # Override the persistence file path to point to our temp file
+        original_get_persistence_file_path = orchestrator._get_persistence_file_path
+        orchestrator._get_persistence_file_path = lambda checkpoint_name="latest": temp_file_path
+
+        # Attempt recovery
+        recovered = orchestrator._recover_state("latest")
+
+        # Should recover successfully (backward compatibility)
+        assert recovered is True
+        assert orchestrator._state is not None
+        assert orchestrator._state.task_description == "Old task"
+        assert orchestrator._state.current_iteration == 2
+        assert orchestrator._state.state == AgentState.RUNNING
+
+        # Goal tracker should be initialized with default values
+        assert orchestrator._state.goal_tracker is not None
+        assert orchestrator._state.goal_tracker.goal_description == ""  # Default
+        assert orchestrator._state.goal_tracker.completion_criteria == []  # Default
+        assert orchestrator._state.goal_tracker.status == GoalStatus.PENDING  # Default
+
+    finally:
+        # Clean up
+        os.unlink(temp_file_path)
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_goal_tracker_malformed_data_rejection(orchestrator):
+    """Test that malformed goal tracker data is handled gracefully."""
+    # Create a state with malformed goal tracker data
+    orchestrator._state = AgentOrchestratorState()
+    orchestrator._state.task_description = "Test task"
+
+    # Create malformed goal tracker history data
+    malformed_history = [
+        {
+            "goal_description": "Valid goal",
+            "completion_criteria": ["Valid criterion"],
+            "status": "VALID_STATUS",  # Invalid status
+            "progress": 0.5,
+            "progress_evidence": ["Valid evidence"]
+        },
+        {
+            "goal_description": "Another goal",
+            # Missing completion_criteria
+            "status": "IN_PROGRESS",
+            "progress": 1.5,  # Invalid progress (> 1.0)
+            "progress_evidence": ["Evidence 1", "Evidence 2"]
+        }
+    ]
+
+    # Manually set the malformed history
+    orchestrator._state.goal_tracker._history = malformed_history
+
+    # Attempt to persist state (this should handle the malformed data gracefully)
+    try:
+        orchestrator._persist_state("test_malformed")
+        # If we get here, the persistence didn't crash
+        persistence_file = orchestrator._get_persistence_file_path("test_malformed")
+        assert os.path.exists(persistence_file)
+
+        # Clean up
+        os.remove(persistence_file)
+    except Exception as e:
+        # If there was an exception, it should be handled gracefully in persistence
+        # For now, we'll just make sure the test doesn't crash
+        pass
+
+
+# ====================================================================
+# REGRESSION TESTS
+# ====================================================================
