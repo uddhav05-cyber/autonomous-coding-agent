@@ -806,5 +806,84 @@ The `_attempt_alternative_approach()` method manages recovery attempts:
 - Advanced planning capabilities requiring significant computational resources
 - Learning across completely unrelated task domains
 - Implementation of Adaptive Iteration Control (Phase 7.3.2)
-- Implementation of Context Optimization (Phase 7.3.5)
 - Implementation of Observability and Metrics (Phase 7.3.9)
+
+## 42. Phase 7.3.4: Progress/Goal Tracking + User Interruption/Control
+
+### Phase 7.3.4.1: Progress Tracking Foundation (IMPLEMENTED)
+
+Implemented a focused ProgressMetrics / ProgressTracker abstraction that provides reliable progress information for later stages.
+
+#### Implementation Details
+
+**ProgressMetrics Data Model**
+- Created a compact, serializable ProgressMetrics class that tracks:
+  - Iteration-level metrics (successful/failed/total tool calls)
+  - Workspace change tracking (file count deltas)
+  - Error tracking (count and deltas)
+  - Success rate calculation
+  - Bounded historical metrics for trend analysis (last 10 iterations)
+- Supports serialization/deserialization for persistence/recovery
+- Provides trend calculation (improving/stable/declining)
+- Defines meaningful progress detection based on successful operations, positive workspace changes, or error reduction
+
+**Integration with AgentOrchestratorState**
+- Added progress_metrics: ProgressMetrics field (with default factory)
+- Added previous iteration counters (prev_total_tool_calls, prev_error_count, prev_workspace_file_count) for calculating per-iteration deltas
+- Updated _persist_state() and _recover_state() methods to handle progress metrics persistence
+- Updated _validate_recovered_state() to validate new fields while maintaining backward compatibility
+
+**Integration with Orchestrator**
+- Enhanced _update_progress() method to use ProgressMetrics instead of legacy fields
+- Progress updates occur at appropriate lifecycle boundaries (success and failure paths)
+- Maintains backward compatibility with legacy progress tracking fields
+- Progress reflects actual execution outcomes from tool execution results
+
+**Trend Calculation**
+- Implements simple deterministic trend model based on:
+  - Success rate trend (weighted 0.5)
+  - Workspace change trend (weighted 0.3)
+  - Error trend (weighted 0.2, negative = improving)
+- Returns "improving", "stable", or "declining" based on weighted scoring
+- Avoids machine learning or complex statistical prediction
+
+**Meaningful Progress Definition**
+- Conservative rule: meaningful progress if any of:
+  - Successful relevant tool operations (successful tool calls > 0)
+  - Relevant workspace changes (positive file count delta)
+  - Error reduction (negative error delta)
+- Explicitly does NOT consider:
+  - Repeated identical operations
+  - Failed operations
+  - Unrelated changes
+  - Changes that immediately regress
+
+**Persistence and Recovery**
+- Integrates with existing _persist_state() and _recover_state() methods
+- Progress history is bounded to prevent memory growth
+- Values are validated during recovery
+- Malformed progress data handled gracefully
+- Maintains compatibility with existing Phase 7.3.1 persisted state
+
+**Tests Added**
+- ProgressMetrics initialization and basic functionality
+- Metric updates and delta calculations
+- Current statistics retrieval
+- Trend calculation (improving, stable, declining)
+- Meaningful progress detection
+- Bounded history maintenance
+- Serialization and deserialization
+- Recovery with valid and malformed data
+- Integration with existing orchestrator behavior
+
+#### Integration Points
+- Uses existing iteration/tool execution information from _execute_tool_calls
+- Leverages existing workspace interfaces for file counting (read-only, no direct filesystem access in AgentOrchestrator)
+- Preserves existing AgentOrchestratorState structure and persistence mechanisms
+- Does not modify termination decisions, max iteration calculations, or adaptive iteration budget (reserved for later stages)
+
+#### Known Limitations
+- Trend calculation uses simple weighted scoring rather than advanced statistical methods
+- Meaningful progress definition is conservative and may not capture all nuances of progress
+- Workspace tracking relies on file count changes rather than semantic relevance
+- History size is fixed at 10 iterations (configurable but not exposed externally)

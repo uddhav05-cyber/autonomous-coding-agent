@@ -30,7 +30,7 @@ def mock_context_manager():
     """Create a mock context manager."""
     mock = MagicMock(spec=ContextManager)
     mock.create_context_package.return_value = MagicMock()
-    mock.create_context_package.return_value.get_context_summary = MagicMock(return_value={"total_tokens": 0})
+    mock.get_context_summary = MagicMock(return_value={"total_tokens": 0})
     return mock
 
 
