@@ -967,3 +967,118 @@ Implemented minimal goal tracking to represent task goal and completion state, i
 - Goal description is currently just the task description
 - Progress evidence tracking is basic string-based
 - History size is fixed at 10 iterations (configurable but not exposed externally)
+
+
+### Phase 7.3.4.3: User Interruption & Control (IMPLEMENTED)
+
+Implemented user interruption and control mechanisms to allow safe user-driven control of an active task including cancel, pause, resume, and stop-after-iteration functionality.
+
+#### Implementation Details
+
+**Control Model**
+- Added PAUSED state to AgentState enum for representing paused execution
+- Added control flags to AgentOrchestrator: _cancelled, _paused, _stop_after_iteration
+- Added public control methods: cancel(), pause(), resume(), stop_after_iteration()
+- Control fields are persisted and recovered to maintain state across sessions
+
+**Integration with AgentOrchestratorState**
+- Added control fields to persistence mechanism:
+  - cancelled: Boolean flag for cancellation state
+  - paused: Boolean flag for pause state
+  - stop_after_iteration: Boolean flag for stop-after-iteration request
+- Updated _persist_state() and _recover_state() methods to handle control fields
+- Updated _validate_recovered_state() to validate new control fields
+
+**Integration with Orchestrator Loop**
+- Added pause/resume handling at safe iteration boundaries:
+  - Check for pause before starting each iteration
+  - When paused, enter wait loop until resumed or cancelled
+  - Persist state when entering paused state
+  - Resume execution from exact point of pause
+- Enhanced cancellation handling:
+  - Works correctly with pause state (can cancel while paused)
+  - Does not override TIMED_OUT or COMPLETED states
+  - Properly sets state to CANCELLED when cancelled
+- Implemented stop-after-iteration functionality:
+  - Completes current iteration before stopping
+  - Does not start next iteration when flag is set
+  - Respects existing completion logic
+
+**Safe Interruption Boundaries**
+- Pause/resume checks occur at iteration boundaries (safe points)
+- Does not interrupt ongoing model invocations or tool executions
+- Allows current iteration to complete before pausing or stopping
+- Maintains existing safety boundaries for tool execution and policy enforcement
+
+**State Transition Rules**
+- PAUSED state can only be entered from RUNNING state at iteration boundaries
+- From PAUSED: can transition to RUNNING (via resume) or CANCELLED (via cancel)
+- CANCELLED state overrides RUNNING/PAUSED but not TIMED_OUT or COMPLETED
+- STOP_AFTER_ITERATION completes current iteration normally then stops
+- All terminal states (COMPLETED, FAILED, CANCELLED, TIMED_OUT) are preserved
+
+**Persistence and Recovery**
+- Control state is fully persisted and recoverable
+- Paused state is correctly restored upon recovery
+- Control flags are reset appropriately for fresh task execution
+- Backward compatibility maintained with older state formats
+- Malformed control data handled gracefully with safe defaults
+
+**Integration with Existing Systems**
+- Cooperates with existing adaptive iteration control
+- Works with failure recovery and alternative approach mechanisms
+- Integrates with progress tracking and goal tracking systems
+- Respects timeout handling (TIMED_OUT takes precedence)
+- Does not modify core decision-making processes
+
+**Tests Added**
+- Cancel active task and verify CANCELLED state
+- Cancel before execution and verify immediate cancellation
+- Cancel while paused and verify proper transition to CANCELLED
+- Cancel after completion verifies no state change
+- Repeated cancel calls are idempotent
+- Pause active task and verify PAUSED state
+- Repeated pause calls are idempotent
+- Pause at safe boundary (before iteration start)
+- Verify paused task does not begin another iteration
+- Resume paused task and verify continuation from exact point
+- Repeated resume calls are idempotent/safe
+- Verify state preservation across pause/resume (progress, goals, history)
+- Verify iteration count preserved across pause/resume
+- Verify progress metrics preserved across pause/resume
+- Verify goal tracking preserved across pause/resume
+- Verify execution history preserved across pause/resume
+- Stop-after-iteration requested during iteration:
+  - Current iteration completes safely
+  - Next iteration does not start
+  - No false FAILED state generated
+- Stop-after-iteration requested before iteration starts:
+  - Stops before starting the iteration
+  - Reports appropriate completion state
+- State transition verification:
+  - CANCELLED remains CANCELLED during cleanup
+  - TIMED_OUT remains TIMED_OUT during cleanup
+  - COMPLETED remains COMPLETED during cleanup
+  - FAILED remains FAILED during cleanup
+  - PAUSED remains PAUSED when appropriate
+- Race/boundary case testing:
+  - Cancellation during retry backoff
+  - Cancellation around timeout boundaries
+  - Pause/resume near iteration boundaries
+  - Stop-after-iteration near iteration boundaries
+- Regression testing: All existing orchestrator behavior remains intact
+
+#### Integration Points
+- Uses existing iteration boundaries for safe interruption checks
+- Leverages existing state persistence mechanisms (_persist_state/_recover_state)
+- Integrates with existing state validation (_validate_recovered_state)
+- Cooperates with existing termination logic through proper state transitions
+- Works with existing adaptive iteration and failure recovery systems
+- Integrates with progress tracking and goal tracking updates
+- Does not modify core orchestrator loop or decision-making processes
+
+#### Known Limitations
+- Pause/resume granularity is at iteration boundaries only
+- No mid-tool-execution or mid-model-invocation interruption
+- Stop-after-iteration completes current iteration fully before stopping
+- Control state increases persistence footprint slightly (3 boolean fields)
