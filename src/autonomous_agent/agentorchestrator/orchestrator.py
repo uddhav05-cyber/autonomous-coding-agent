@@ -4,10 +4,13 @@ This module provides the AgentOrchestrator class that coordinates the
 autonomous coding-agent execution loop, managing the iterative process of
 LLM reasoning, tool execution, and state updates.
 """
-
 from __future__ import annotations
 
+print("!!! MODULE LEVEL PRINT !!!")
+
 import asyncio
+import json
+import os
 import time
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -37,6 +40,449 @@ from autonomous_agent.tool.errors import (
 import json
 import os
 import hashlib
+
+
+@dataclass
+class ProgressMetrics:
+    """Metrics for tracking progress of the agent orchestrator.
+
+    Tracks meaningful progress indicators that are already available through
+    the existing architecture, without duplicating Repository Understanding logic
+    or introducing direct filesystem access.
+    """
+    # Current iteration metrics
+    iteration: int = 0
+    successful_tool_calls: int = 0
+    failed_tool_calls: int = 0
+    total_tool_calls: int = 0
+
+    # Workspace change tracking (based on file count changes)
+    workspace_file_count: int = 0
+    workspace_file_count_delta: int = 0  # Change from previous iteration
+
+    # Error tracking
+    error_count: int = 0
+    error_count_delta: int = 0  # Change from previous iteration
+
+    # Success rate (ratio of successful to total tool calls)
+    success_rate: float = 0.0
+
+    # Historical data for trend calculation (bounded to prevent memory growth)
+    _history: List['ProgressMetrics'] = field(default_factory=list)
+    _max_history_size: int = 10  # Keep last 10 iterations for trend analysis
+
+    def update(self,
+               iteration: int,
+               successful_tool_calls: int,
+               failed_tool_calls: int,
+               workspace_file_count: int,
+               error_count: int) -> str:
+        """Update progress metrics with current iteration data.
+
+        Args:
+            iteration: Current iteration number
+            successful_tool_calls: Number of successful tool calls in this iteration
+            failed_tool_calls: Number of failed tool calls in this iteration
+            workspace_file_count: Current workspace file count
+            error_count: Current error count
+        Returns:
+            "improving": Positive trend in success rate and/or workspace changes
+            "stable": No significant change (no meaningful progress)
+            "declining": Negative trend in success rate and/or increasing errors
+        """
+        # Get previous metrics if available
+        prev_metrics = self._history[-1] if self._history else None
+
+        # Calculate deltas - compare to 0 if no previous metrics
+        prev_workspace_file_count = prev_metrics.workspace_file_count if prev_metrics else 0
+        prev_error_count = prev_metrics.error_count if prev_metrics else 0
+        workspace_file_count_delta = workspace_file_count - prev_workspace_file_count
+        error_count_delta = error_count - prev_error_count
+
+        # Calculate success rate
+        total_tool_calls = successful_tool_calls + failed_tool_calls
+        success_rate = successful_tool_calls / max(total_tool_calls, 1) if total_tool_calls > 0 else 0.0
+
+        # Create new metrics instance
+        new_metrics = ProgressMetrics(
+            iteration=iteration,
+            successful_tool_calls=successful_tool_calls,
+            failed_tool_calls=failed_tool_calls,
+            total_tool_calls=total_tool_calls,
+            workspace_file_count=workspace_file_count,
+            workspace_file_count_delta=workspace_file_count_delta,
+            error_count=error_count,
+            error_count_delta=error_count_delta,
+            success_rate=success_rate,
+            _max_history_size=self._max_history_size
+        )
+        new_metrics._history = self._history.copy()  # Copy existing history
+
+        # Add to history and maintain bounded size
+        self._history.append(new_metrics)
+        if len(self._history) > self._max_history_size:
+            self._history = self._history[-self._max_history_size:]
+
+        # Update current instance with new values
+        self.iteration = new_metrics.iteration
+        self.successful_tool_calls = new_metrics.successful_tool_calls
+        self.failed_tool_calls = new_metrics.failed_tool_calls
+        self.total_tool_calls = new_metrics.total_tool_calls
+        self.workspace_file_count = new_metrics.workspace_file_count
+        self.workspace_file_count_delta = new_metrics.workspace_file_count_delta
+        self.error_count = new_metrics.error_count
+        self.error_count_delta = new_metrics.error_count_delta
+        self.success_rate = new_metrics.success_rate
+
+        return self.get_trend()
+
+    def get_trend(self) -> str:
+        """Calculate and return the current progress trend.
+
+        Analyzes recent history to determine if progress is improving, stable, or declining
+        based on success rate, workspace changes, and error trends.
+
+        Returns:
+            "improving": Positive trend in success rate and/or workspace changes
+            "stable": No significant change (no meaningful progress)
+            "declining": Negative trend in success rate and/or increasing errors
+        """
+
+        if len(self._history) < 3:
+            # Not enough data for trend calculation
+            return "stable"
+
+        # Get recent history (last 3 entries)
+        recent = self._history[-3:]
+
+        # Calculate trends in key indicators
+        success_rate_trend = recent[-1].success_rate - recent[0].success_rate
+        workspace_change_trend = sum(m.workspace_file_count_delta for m in recent)
+        error_trend = recent[-1].error_count - recent[0].error_count  # Negative is improving (errors decreasing)
+
+        # Determine trend based on weighted factors
+        # Success rate improvement is most important, then workspace changes, then error reduction
+        improving_score = (
+            success_rate_trend * 0.5 +  # Weight success rate highest
+            (workspace_change_trend > 0) * 0.3 +  # Positive workspace change
+            (-error_trend) * 0.2  # Negative error trend (errors decreasing)
+        )
+
+        declining_score = (
+            -success_rate_trend * 0.5 +  # Success rate decreasing
+            (workspace_change_trend < 0) * 0.3 +  # Negative workspace change
+            error_trend * 0.2  # Positive error trend (errors increasing)
+        )
+
+        if improving_score > 0.2:
+            return "improving"
+        elif declining_score > 0.2:
+            return "declining"
+        else:
+            return "stable"
+
+    def get_current_stats(self) -> Dict[str, Any]:
+        """Get current progress statistics.
+
+        Returns:
+            Dictionary containing current metrics
+        """
+        return {
+            "iteration": self.iteration,
+            "successful_tool_calls": self.successful_tool_calls,
+            "failed_tool_calls": self.failed_tool_calls,
+            "total_tool_calls": self.total_tool_calls,
+            "workspace_file_count": self.workspace_file_count,
+            "workspace_file_count_delta": self.workspace_file_count_delta,
+            "error_count": self.error_count,
+            "error_count_delta": self.error_count_delta,
+            "success_rate": self.success_rate,
+            "trend": self.get_trend()
+        }
+
+    def is_meaningful_progress(self) -> bool:
+        """Determine if the current iteration represents meaningful progress.
+        True if meaningful progress detected, False otherwise
+        Meaningful progress is defined as:
+        - Successful relevant tool operations (successful tool calls > 0)
+        - OR relevant workspace changes (positive file count delta)
+        - OR error reduction (negative error delta)
+
+        Does NOT consider:
+        - Repeated identical operations (captured by tool call patterns, but we're being conservative)
+        - Failed operations
+        - Unrelated changes
+        - Changes that immediately regress
+
+        """
+        # Need at least one previous iteration to compare
+        if len(self._history) < 2:
+            # First iteration - consider it meaningful if we had any success
+            return self.successful_tool_calls > 0
+
+        prev = self._history[-1]
+
+        # Check for meaningful progress indicators
+        has_successful_operations = self.successful_tool_calls > 0
+        has_positive_workspace_change = self.workspace_file_count_delta > 0
+        has_error_reduction = self.error_count_delta < 0
+
+        return has_successful_operations or has_positive_workspace_change or has_error_reduction
+
+    def get_bounded_history(self) -> List[Dict[str, Any]]:
+        """Get bounded history as a list of dictionaries for serialization.
+
+        Returns:
+            List of metric dictionaries representing bounded history
+        """
+        return [
+            {
+                "iteration": m.iteration,
+                "successful_tool_calls": m.successful_tool_calls,
+                "failed_tool_calls": m.failed_tool_calls,
+                "total_tool_calls": m.total_tool_calls,
+                "workspace_file_count": m.workspace_file_count,
+                "workspace_file_count_delta": m.workspace_file_count_delta,
+                "error_count": m.error_count,
+                "error_count_delta": m.error_count_delta,
+                "success_rate": m.success_rate
+            }
+            for m in self._history
+        ]
+
+    @classmethod
+    def from_bounded_history(cls, history_data: List[Dict[str, Any]], max_history_size: int = 10) -> 'ProgressMetrics':
+        """Create ProgressMetrics instance from bounded history data.
+
+        Args:
+            history_data: List of metric dictionaries
+            max_history_size: Maximum size for history
+
+        Returns:
+            ProgressMetrics instance with restored history
+        """
+        if not history_data:
+            return cls(_max_history_size=max_history_size)
+
+        # Create instance
+        instance = cls(_max_history_size=max_history_size)
+        instance._history = []
+
+        # Recreate metrics from history data
+        for data in history_data:
+            metrics = cls(
+                iteration=data["iteration"],
+                successful_tool_calls=data["successful_tool_calls"],
+                failed_tool_calls=data["failed_tool_calls"],
+                total_tool_calls=data["total_tool_calls"],
+                workspace_file_count=data["workspace_file_count"],
+                workspace_file_count_delta=data["workspace_file_count_delta"],
+                error_count=data["error_count"],
+                error_count_delta=data["error_count_delta"],
+                success_rate=data["success_rate"],
+                _max_history_size=max_history_size
+            )
+            instance._history.append(metrics)
+
+        # Ensure we don't exceed max history size
+        if len(instance._history) > max_history_size:
+            instance._history = instance._history[-max_history_size:]
+
+        # Set current metrics to the last entry if available
+        if instance._history:
+            last = instance._history[-1]
+            instance.iteration = last.iteration
+            instance.successful_tool_calls = last.successful_tool_calls
+            instance.failed_tool_calls = last.failed_tool_calls
+            instance.total_tool_calls = last.total_tool_calls
+            instance.workspace_file_count = last.workspace_file_count
+            instance.workspace_file_count_delta = last.workspace_file_count_delta
+            instance.error_count = last.error_count
+            instance.error_count_delta = last.error_count_delta
+            instance.success_rate = last.success_rate
+
+        return instance
+
+
+class GoalStatus(Enum):
+    """Minimal status model for goal tracking."""
+    PENDING = auto()      # Goal has been set but not yet pursued
+    IN_PROGRESS = auto()  # Work is actively being done toward the goal
+    COMPLETED = auto()    # Goal has been successfully achieved
+    FAILED = auto()       # Goal has failed to be achieved
+
+
+@dataclass
+class GoalTracker:
+    """Tracks progress toward a specific goal with completion criteria.
+
+    The GoalTracker works alongside ProgressMetrics to provide goal-oriented
+    tracking without duplicating progress measurement logic.
+    """
+    # Goal definition
+    goal_description: str = ""
+    completion_criteria: List[str] = field(default_factory=list)
+
+    # Current status
+    status: GoalStatus = GoalStatus.PENDING
+
+    # Progress tracking (0.0 to 1.0)
+    progress: float = 0.0
+    progress_evidence: List[str] = field(default_factory=list)
+
+    # Historical data for tracking and serialization
+    _history: List['GoalTracker'] = field(default_factory=list)
+    _max_history_size: int = 10  # Keep last 10 updates for history
+
+    def update(self,
+               goal_description: str,
+               completion_criteria: List[str],
+               status: GoalStatus,
+               progress: float,
+               progress_evidence: List[str]) -> None:
+        """Update the goal tracker with current state.
+
+        Args:
+            goal_description: Description of the goal
+            completion_criteria: List of criteria that must be met for completion
+            status: Current status of the goal
+            progress: Progress value between 0.0 and 1.0
+            progress_evidence: List of evidence supporting the progress value
+        """
+        # Create new state instance
+        new_state = GoalTracker(
+            goal_description=goal_description,
+            completion_criteria=completion_criteria.copy(),
+            status=status,
+            progress=max(0.0, min(1.0, progress)),  # Clamp to [0,1]
+            progress_evidence=progress_evidence.copy(),
+            _max_history_size=self._max_history_size
+        )
+
+        # Copy history and add current state
+        new_state._history = self._history.copy()
+        new_state._history.append(new_state)
+
+        # Maintain bounded history size
+        if len(new_state._history) > self._max_history_size:
+            new_state._history = new_state._history[-self._max_history_size:]
+
+        # Update current instance with new values
+        self.goal_description = new_state.goal_description
+        self.completion_criteria = new_state.completion_criteria.copy()
+        self.status = new_state.status
+        self.progress = new_state.progress
+        self.progress_evidence = new_state.progress_evidence.copy()
+        self._history = new_state._history
+
+    def evaluate_completion(self, evidence: List[str]) -> Tuple[bool, float]:
+        """Evaluate goal completion based on provided evidence.
+
+        Args:
+            evidence: List of evidence items to evaluate against criteria
+
+        Returns:
+            Tuple of (is_complete, progress_score) where:
+            - is_complete: True if all criteria are satisfied
+            - progress_score: Progress value between 0.0 and 1.0 based on criteria satisfaction
+        """
+        if not self.completion_criteria:
+            # No criteria means we cannot determine completion
+            return False, 0.0
+
+        # Count how many criteria are satisfied by the evidence
+        satisfied_criteria = 0
+        for criterion in self.completion_criteria:
+            # Simple matching: criterion is satisfied if any evidence contains it
+            # In a more sophisticated implementation, this could use semantic matching
+            if any(criterion.lower() in evidence_item.lower() for evidence_item in evidence):
+                satisfied_criteria += 1
+
+        # Calculate progress as ratio of satisfied criteria
+        progress_score = satisfied_criteria / len(self.completion_criteria)
+        is_complete = satisfied_criteria == len(self.completion_criteria)
+
+        return is_complete, progress_score
+
+    def get_current_stats(self) -> Dict[str, Any]:
+        """Get current goal tracking statistics.
+
+        Returns:
+            Dictionary containing current goal tracking state
+        """
+        return {
+            "goal_description": self.goal_description,
+            "completion_criteria": self.completion_criteria.copy(),
+            "status": self.status.name,
+            "progress": self.progress,
+            "progress_evidence": self.progress_evidence.copy(),
+            "history_count": len(self._history)
+        }
+
+    def get_bounded_history(self) -> List[Dict[str, Any]]:
+        """Get bounded history as a list of dictionaries for serialization.
+
+        Returns:
+            List of goal tracker state dictionaries representing bounded history
+        """
+        return [
+            {
+                "goal_description": g.goal_description,
+                "completion_criteria": g.completion_criteria.copy(),
+                "status": g.status.name,
+                "progress": g.progress,
+                "progress_evidence": g.progress_evidence.copy()
+            }
+            for g in self._history
+        ]
+
+    @classmethod
+    def from_bounded_history(cls, history_data: List[Dict[str, Any]], max_history_size: int = 10) -> 'GoalTracker':
+        """Create GoalTracker instance from bounded history data.
+
+        Args:
+            history_data: List of goal tracker state dictionaries
+            max_history_size: Maximum size for history
+
+        Returns:
+            GoalTracker instance with restored history
+        """
+        if not history_data:
+            return cls(_max_history_size=max_history_size)
+
+        # Create instance
+        instance = cls(_max_history_size=max_history_size)
+        instance._history = []
+
+        # Recreate goal tracker states from history data
+        for data in history_data:
+            # Convert status string back to enum
+            status_enum = GoalStatus[data["status"]]
+
+            state = GoalTracker(
+                goal_description=data["goal_description"],
+                completion_criteria=data["completion_criteria"].copy(),
+                status=status_enum,
+                progress=data["progress"],
+                progress_evidence=data["progress_evidence"].copy(),
+                _max_history_size=max_history_size
+            )
+            instance._history.append(state)
+
+        # Ensure we don't exceed max history size
+        if len(instance._history) > max_history_size:
+            instance._history = instance._history[-max_history_size:]
+
+        # Set current state to the last entry if available
+        if instance._history:
+            last = instance._history[-1]
+            instance.goal_description = last.goal_description
+            instance.completion_criteria = last.completion_criteria.copy()
+            instance.status = last.status
+            instance.progress = last.progress
+            instance.progress_evidence = last.progress_evidence.copy()
+
+        return instance
 
 
 class AgentState(Enum):
@@ -80,12 +526,24 @@ class AgentOrchestratorState:
     retry_base_delay: float = 1.0  # seconds
     max_retry_delay: float = 30.0
     retry_multiplier: float = 2.0
+    # Failure pattern tracking for advanced recovery
+    failure_history: List[Dict[str, Any]] = field(default_factory=list)
+    failure_type_counts: Dict[str, int] = field(default_factory=dict)
+    alternative_approaches_attempted: List[str] = field(default_factory=list)
 
     # Progress detection
     stall_detection_iterations: int = 3
     last_progress_iteration: int = 0
     last_successful_tool_calls: int = 0
     last_workspace_file_count: int = 0
+    # Progress metrics tracking (Phase 7.3.4.1)
+    progress_metrics: ProgressMetrics = field(default_factory=ProgressMetrics)
+    # Goal tracking (Phase 7.3.4.2)
+    goal_tracker: GoalTracker = field(default_factory=GoalTracker)
+    # Previous iteration counters for calculating per-iteration deltas
+    prev_total_tool_calls: int = 0
+    prev_error_count: int = 0
+    prev_workspace_file_count: int = 0
 
     # Completion signals
     is_complete: bool = False
@@ -145,6 +603,7 @@ class AgentOrchestrator:
             retry_multiplier: Multiplier for exponential backoff
             stall_detection_iterations: Number of iterations with no progress to consider stalled
         """
+        print("!!! AgentOrchestrator.__init__ called !!!")
         self.model_adapter = model_adapter
         self.context_manager = context_manager
         self.tool_registry = tool_registry
@@ -192,7 +651,9 @@ class AgentOrchestrator:
         Args:
             checkpoint_name: Name of the checkpoint
         """
+        print(f"DEBUG: _persist_state called with checkpoint_name={checkpoint_name}")
         if self._state is None:
+            print(f"DEBUG: _state is None, not persisting")
             return
 
         # Convert state to a dictionary, excluding non-serializable fields
@@ -225,17 +686,34 @@ class AgentOrchestrator:
             "final_response": self._state.final_response,
             "safety_violations": self._state.safety_violations,
             "resource_warnings": self._state.resource_warnings,
+            "failure_history": self._state.failure_history,
+            "failure_type_counts": self._state.failure_type_counts,
+            "alternative_approaches_attempted": self._state.alternative_approaches_attempted,
+            # Progress metrics tracking (Phase 7.3.4.1)
+            "progress_metrics_history": self._state.progress_metrics.get_bounded_history(),
+            "progress_metrics_max_size": self._state.progress_metrics._max_history_size,
+            # Goal tracking (Phase 7.3.4.2)
+            "goal_tracker_history": self._state.goal_tracker.get_bounded_history(),
+            "goal_tracker_max_size": self._state.goal_tracker._max_history_size,
+            # Previous iteration counters for calculating per-iteration deltas
+            "prev_total_tool_calls": self._state.prev_total_tool_calls,
+            "prev_error_count": self._state.prev_error_count,
+            "prev_workspace_file_count": self._state.prev_workspace_file_count
         }
 
         # Remove any potentially sensitive data (though none should be present)
         # We could add more filtering here if needed
 
         file_path = self._get_persistence_file_path(checkpoint_name)
+        print(f"DEBUG: Persisting state to {file_path}")
+        print(f"DEBUG: State dict keys: {list(state_dict.keys())}")
         try:
             with open(file_path, "w") as f:
                 json.dump(state_dict, f, indent=2)
+            print(f"DEBUG: State persisted successfully")
         except Exception as e:
             # Log error but don't crash the orchestrator
+            print(f"DEBUG: Error persisting state: {e}")
             pass  # In production, we might want to log this
     def _recover_state(self, checkpoint_name: str = "latest") -> bool:
         """Recover orchestrator state from a persisted file.
@@ -246,25 +724,36 @@ class AgentOrchestrator:
         Returns:
             True if recovery was successful, False otherwise
         """
+        print(f"DEBUG: _recover_state called with checkpoint_name={checkpoint_name}")
         file_path = self._get_persistence_file_path(checkpoint_name)
+        print(f"DEBUG: Looking for persistence file at {file_path}")
         if not os.path.exists(file_path):
+            # Debug: File doesn't exist
+            print(f"DEBUG: Persistence file does not exist at {file_path}")
             return False
 
         try:
+            print(f"DEBUG: Reading persistence file from {file_path}")
             with open(file_path, "r") as f:
                 state_dict = json.load(f)
+            print(f"DEBUG: Loaded state dict: {state_dict}")
 
             # Validate the recovered state
             if not self._validate_recovered_state(state_dict):
+                # Debug: Validation failed
+                print(f"DEBUG: State validation failed")
                 return False
 
             # Check task description match: if current task description is set (non-empty), it must match
             if self._state is not None and self._state.task_description and self._state.task_description != state_dict.get("task_description"):
+                # Debug: Task description mismatch
+                print(f"DEBUG: Task description mismatch: current='{self._state.task_description}', recovered='{state_dict.get('task_description')}'")
                 return False
 
             # Reconstruct the state
             # We need to create a new AgentOrchestratorState instance
             # and populate it with the recovered data
+            print(f"DEBUG: Reconstructing state from recovered data")
             recovered_state = AgentOrchestratorState(
                 task_id=state_dict["task_id"],
                 task_description=state_dict["task_description"],
@@ -294,12 +783,34 @@ class AgentOrchestrator:
                 final_response=state_dict["final_response"],
                 safety_violations=state_dict["safety_violations"],
                 resource_warnings=state_dict["resource_warnings"],
+                failure_history=state_dict.get("failure_history", []),
+                failure_type_counts=state_dict.get("failure_type_counts", {}),
+                alternative_approaches_attempted=state_dict.get("alternative_approaches_attempted", []),
+                # Progress metrics tracking (Phase 7.3.4.1)
+                progress_metrics=ProgressMetrics.from_bounded_history(
+                    state_dict.get("progress_metrics_history", []),
+                    state_dict.get("progress_metrics_max_size", 10)
+                ),
+                # Goal tracking (Phase 7.3.4.2)
+                goal_tracker=GoalTracker.from_bounded_history(
+                    state_dict.get("goal_tracker_history", []),
+                    state_dict.get("goal_tracker_max_size", 10)
+                ),
+                # Previous iteration counters for calculating per-iteration deltas
+                prev_total_tool_calls=state_dict.get("prev_total_tool_calls", 0),
+                prev_error_count=state_dict.get("prev_error_count", 0),
+                prev_workspace_file_count=state_dict.get("prev_workspace_file_count", 0)
             )
 
+            print(f"DEBUG: Setting _state to recovered state")
             self._state = recovered_state
+            print(f"DEBUG: Recovery successful")
             return True
         except Exception as e:
             # Recovery failed
+            print(f"DEBUG: Exception during recovery: {e}")
+            import traceback
+            traceback.print_exc()
             return False
     def _validate_recovered_state(self, state_dict: dict) -> bool:
         """Validate recovered state dictionary.
@@ -387,6 +898,121 @@ class AgentOrchestrator:
             if not isinstance(warning, str):
                 return False
 
+        # Validate new fields for Phase 7.3.3
+        if "failure_history" in state_dict:
+            if not isinstance(state_dict["failure_history"], list):
+                return False
+            for failure in state_dict["failure_history"]:
+                if not isinstance(failure, dict):
+                    return False
+                required_failure_fields = ["timestamp", "iteration", "error_type", "error_message", "is_retryable"]
+                for field in required_failure_fields:
+                    if field not in failure:
+                        return False
+                if not isinstance(failure["timestamp"], (int, float)):
+                    return False
+                if not isinstance(failure["iteration"], int) or failure["iteration"] < 0:
+                    return False
+                if not isinstance(failure["error_type"], str):
+                    return False
+                if not isinstance(failure["error_message"], str):
+                    return False
+                if not isinstance(failure["is_retryable"], bool):
+                    return False
+
+        if "failure_type_counts" in state_dict:
+            if not isinstance(state_dict["failure_type_counts"], dict):
+                return False
+            for error_type, count in state_dict["failure_type_counts"].items():
+                if not isinstance(error_type, str):
+                    return False
+                if not isinstance(count, int) or count < 0:
+                    return False
+
+        if "alternative_approaches_attempted" in state_dict:
+            if not isinstance(state_dict["alternative_approaches_attempted"], list):
+                return False
+            for approach in state_dict["alternative_approaches_attempted"]:
+                if not isinstance(approach, str):
+                    return False
+
+        # Validate progress metrics tracking fields (Phase 7.3.4.1)
+        if "progress_metrics_history" in state_dict:
+            if not isinstance(state_dict["progress_metrics_history"], list):
+                return False
+            for metric in state_dict["progress_metrics_history"]:
+                if not isinstance(metric, dict):
+                    return False
+                # Check that each metric has the expected fields
+                expected_fields = ["iteration", "successful_tool_calls", "failed_tool_calls", "total_tool_calls",
+                                 "workspace_file_count", "workspace_file_count_delta", "error_count",
+                                 "error_count_delta", "success_rate"]
+                for field in expected_fields:
+                    if field not in metric:
+                        return False
+                    if not isinstance(metric[field], (int, float)) and field != "success_rate":
+                        return False
+                    if field == "success_rate" and not isinstance(metric[field], (int, float)):
+                        return False
+
+        if "progress_metrics_max_size" in state_dict:
+            if not isinstance(state_dict["progress_metrics_max_size"], int) or state_dict["progress_metrics_max_size"] <= 0:
+                return False
+
+        if "prev_total_tool_calls" in state_dict:
+            if not isinstance(state_dict["prev_total_tool_calls"], int) or state_dict["prev_total_tool_calls"] < 0:
+                return False
+
+        if "prev_error_count" in state_dict:
+            if not isinstance(state_dict["prev_error_count"], int) or state_dict["prev_error_count"] < 0:
+                return False
+
+        if "prev_workspace_file_count" in state_dict:
+            if not isinstance(state_dict["prev_workspace_file_count"], int) or state_dict["prev_workspace_file_count"] < 0:
+                return False
+
+        # Validate goal tracking fields (Phase 7.3.4.2) - optional for backward compatibility
+        if "goal_tracker_history" in state_dict:
+            if not isinstance(state_dict["goal_tracker_history"], list):
+                return False
+            for goal_state in state_dict["goal_tracker_history"]:
+                if not isinstance(goal_state, dict):
+                    return False
+                # Check that each goal state has the expected fields
+                expected_fields = ["goal_description", "completion_criteria", "status", "progress", "progress_evidence"]
+                for field in expected_fields:
+                    if field not in goal_state:
+                        return False
+                    # Validate each field according to its expected type
+                    if field == "goal_description":
+                        if not isinstance(goal_state[field], str):
+                            return False
+                    elif field == "completion_criteria":
+                        if not isinstance(goal_state[field], list):
+                            return False
+                        for item in goal_state[field]:
+                            if not isinstance(item, str):
+                                return False
+                    elif field == "status":
+                        if not isinstance(goal_state[field], str):
+                            return False
+                        # Validate status is a valid GoalStatus
+                        if goal_state[field] not in [s.name for s in GoalStatus]:
+                            return False
+                    elif field == "progress":
+                        if not isinstance(goal_state[field], (int, float)) or goal_state[field] < 0 or goal_state[field] > 1:
+                            return False
+                    elif field == "progress_evidence":
+                        if not isinstance(goal_state[field], list):
+                            return False
+                        for evidence in goal_state[field]:
+                            if not isinstance(evidence, str):
+                                return False
+
+        if "goal_tracker_max_size" in state_dict:
+            if not isinstance(state_dict["goal_tracker_max_size"], int) or state_dict["goal_tracker_max_size"] <= 0:
+                return False
+
         return True
 
     async def execute_task(self, task_description: str) -> AgentOrchestratorState:
@@ -398,6 +1024,7 @@ class AgentOrchestrator:
         Returns:
             Final agent state after task completion or termination
         """
+        print(f"DEBUG: execute_task called with task_description={task_description}")
         # Attempt to recover state from latest checkpoint
         recovered = self._recover_state("latest")
         if recovered and self._state is not None and not self._state.is_complete and self._state.task_description == task_description:
@@ -409,6 +1036,7 @@ class AgentOrchestrator:
                 self._state.state = AgentState.RUNNING
         else:
             # Initialize state
+            # Initialize state with progress tracking fields
             self._state = AgentOrchestratorState(
                 task_description=task_description,
                 max_iterations=self.max_iterations,
@@ -416,8 +1044,16 @@ class AgentOrchestrator:
                 retry_base_delay=self.retry_base_delay,
                 max_retry_delay=self.max_retry_delay,
                 retry_multiplier=self.retry_multiplier,
-                stall_detection_iterations=self.stall_detection_iterations
+                stall_detection_iterations=self.stall_detection_iterations,
+                prev_total_tool_calls=0,
+                prev_error_count=0,
+                prev_workspace_file_count=0
             )
+            # Initialize goal tracking with the task description as the goal
+            self._state.goal_tracker.goal_description = task_description
+            # Set initial completion criteria based on the task
+            # For now, we'll use a simple criterion: task completion
+            self._state.goal_tracker.completion_criteria = ["Task completed successfully"]
             self._state.state = AgentState.RUNNING
             self._state.start_time = time.time()
             self._state.last_activity_time = self._state.start_time
@@ -440,6 +1076,9 @@ class AgentOrchestrator:
 
                 # Execute one iteration
                 await self._execute_iteration()
+
+                # Update goal tracker based on iteration results
+                self._update_goal_tracker()
 
                 # Check if we should continue
                 if self._state.is_complete:
@@ -473,17 +1112,35 @@ class AgentOrchestrator:
             )
 
         finally:
+            print("DEBUG: Entering finally block")
             # Ensure we have a final state
+            print(f"DEBUG: Finally block - is_complete: {self._state.is_complete if self._state else None}, current_iteration: {self._state.current_iteration if self._state else None}, max_iterations: {self._state.max_iterations if self._state else None}")
             if not self._state.is_complete:
-                self._state.state = AgentState.FAILED
-                self._state.is_complete = True
-                if not self._state.completion_reason:
-                    self._state.completion_reason = "Max iterations reached without completion"
-
+                # Check if we reached max iterations
+                if self._state.current_iteration >= self._state.max_iterations:
+                    print(f"DEBUG: error_count = {self._state.error_count}")
+                    # If we have errors when reaching max iterations, treat as failure
+                    if self._state.error_count > 0:
+                        self._state.state = AgentState.FAILED
+                        self._state.is_complete = True
+                        self._state.completion_reason = "Max iterations reached without completion"
+                        print(f"DEBUG: Setting FAILED state due to max iterations reached with errors")
+                    else:
+                        self._state.state = AgentState.COMPLETED
+                        self._state.is_complete = True
+                        self._state.completion_reason = "Maximum iterations reached"
+                        print(f"DEBUG: Setting COMPLETED state due to max iterations reached")
+                else:
+                    self._state.state = AgentState.FAILED
+                    self._state.is_complete = True
+                    if not self._state.completion_reason:
+                        self._state.completion_reason = "Max iterations reached without completion"
+                    print(f"DEBUG: Setting FAILED state due to not reaching max iterations")
         return self._state
 
     async def _execute_iteration(self) -> None:
         """Execute a single iteration of the agent loop with retry logic and progress tracking."""
+        print("DEBUG: _execute_iteration called")
         if self._state is None:
             raise RuntimeError("Orchestrator state not initialized")
 
@@ -558,11 +1215,31 @@ class AgentOrchestrator:
                 await self._process_tool_results(tool_results)
 
                 # Step 8: Update execution history with results
-                self._state.tool_call_history.extend([
-                    {"call": call.dict() if hasattr(call, 'dict') else str(call),
-                     "result": result.dict() if hasattr(result, 'dict') else str(result)}
-                    for call, result in zip(validated_tool_calls, tool_results)
-                ])
+                for call, result in zip(validated_tool_calls, tool_results):
+                    # Safely extract data from tool call and result for JSON serialization
+                    call_data = {}
+                    result_data = {}
+
+                    # Extract call data
+                    if hasattr(call, 'name') and hasattr(call, 'arguments'):
+                        call_data = {
+                            "name": call.name,
+                            "arguments": call.arguments if isinstance(call.arguments, dict) else str(call.arguments)
+                        }
+                    else:
+                        call_data = {"raw_call": str(call)}
+
+                    # Extract result data
+                    if hasattr(result, 'success') and hasattr(result, 'data') and hasattr(result, 'error'):
+                        result_data = {
+                            "success": result.success,
+                            "data": str(result.data) if result.data is not None else None,
+                            "error": str(result.error) if result.error is not None else None
+                        }
+                    else:
+                        result_data = {"raw_result": str(result)}
+
+                    self._state.tool_call_history.append({"call": call_data, "result": result_data})
 
                 # If we succeeded, update progress tracking and break out of retry loop
                 self._update_progress(success=True)
@@ -584,15 +1261,24 @@ class AgentOrchestrator:
                         tool_name="agent_orchestrator"
                     ) if not isinstance(e, ToolError) else e
 
+                    # Record failure for pattern detection
+                    self._record_failure(e, self._state.current_iteration)
+
                     # Update progress tracking for failed iteration
                     self._update_progress(success=False)
                     self._persist_state()
 
-                    # Check if we should terminate due to consecutive failures
+                    # Check for fundamental flaw that suggests we should try alternative approaches
                     if self._state.consecutive_errors >= self._state.max_consecutive_failures:
-                        self._state.state = AgentState.FAILED
-                        self._state.is_complete = True
-                        self._state.completion_reason = f"Too many consecutive errors: {self._state.consecutive_errors}"
+                        if self._detect_fundamental_flaw() and self._attempt_alternative_approach():
+                            # We've detected a fundamental flaw and will try an alternative approach
+                            # Don't fail yet - let the next iteration try the alternative approach
+                            pass
+                        else:
+                            # Either no fundamental flaw detected or no alternative approaches left
+                            self._state.state = AgentState.FAILED
+                            self._state.is_complete = True
+                            self._state.completion_reason = f"Too many consecutive errors: {self._state.consecutive_errors}"
                     return  # Exit the iteration (either failed or will be retried in next iteration if not complete)
 
         # If we exhausted all retries without success, the error has already been handled above
@@ -650,85 +1336,303 @@ class AgentOrchestrator:
         return base + jitter
 
     def _update_progress(self, success: bool) -> None:
-        """Update progress tracking for stall detection.
+        """Update progress tracking using ProgressMetrics.
 
         Args:
             success: Whether the current iteration was successful
         """
+        print("!!! _update_progress called !!!")
         if self._state is None:
             return
 
-        # Update last progress iteration if we had success
+        # Calculate current workspace file count
+        try:
+            if os.path.exists(str(self.workspace.workspace_root)):
+                workspace_file_count = sum(len(files) for _, _, files in os.walk(str(self.workspace.workspace_root)))
+            else:
+                workspace_file_count = 0
+        except Exception:
+            # If we can't count files, use 0
+            workspace_file_count = 0
+
+        # Calculate per-iteration metrics by subtracting previous iteration's cumulative values
+        successful_tool_calls = self._state.total_tool_calls - self._state.prev_total_tool_calls
+        failed_tool_calls = self._state.error_count - self._state.prev_error_count
+        workspace_file_count_delta = workspace_file_count - self._state.prev_workspace_file_count
+        error_count_delta = self._state.error_count - self._state.prev_error_count
+
+        # Update progress metrics
+        self._state.progress_metrics.update(
+            iteration=self._state.current_iteration,
+            successful_tool_calls=successful_tool_calls,
+            failed_tool_calls=failed_tool_calls,
+            workspace_file_count=workspace_file_count,
+            error_count=self._state.error_count
+        )
+
+        # Update previous values for next iteration
+        self._state.prev_total_tool_calls = self._state.total_tool_calls
+        self._state.prev_error_count = self._state.error_count
+        self._state.prev_workspace_file_count = workspace_file_count
+
+        # Update legacy fields for backward compatibility (will be deprecated in future phases)
         if success:
             self._state.last_progress_iteration = self._state.current_iteration
-            # Update workspace file count for progress detection
-            try:
-                # Count files in workspace (simplified)
-                import os
-                if os.path.exists(str(self.workspace.workspace_root)):
-                    file_count = sum(len(files) for _, _, files in os.walk(str(self.workspace.workspace_root)))
-                    self._state.last_workspace_file_count = file_count
-                else:
-                    self._state.last_workspace_file_count = 0
-            except Exception:
-                # If we can't count files, skip workspace tracking
-                pass
-        # Note: We don't update on failure, but we could track consecutive failures elsewhere
+            self._state.last_successful_tool_calls = successful_tool_calls
+            self._state.last_workspace_file_count = workspace_file_count
+
+        # Debug print
+        print(f"DEBUG: Iteration {self._state.current_iteration}, successful_tool_calls={successful_tool_calls}, total_tool_calls={self._state.total_tool_calls}, prev_total_tool_calls={self._state.prev_total_tool_calls}")
+
+    def _update_goal_tracker(self) -> None:
+        """Update goal tracker based on iteration results.
+
+        This method evaluates progress toward the goal based on the outcomes
+        of the current iteration and updates the goal tracker accordingly.
+        """
+        if self._state is None:
+            return
+
+        # Gather information from the current iteration
+        successful_tool_calls = self._state.total_tool_calls - self._state.prev_total_tool_calls
+        failed_tool_calls = self._state.error_count - self._state.prev_error_count
+
+        # Calculate workspace changes
+        try:
+            if os.path.exists(str(self.workspace.workspace_root)):
+                workspace_file_count = sum(len(files) for _, _, files in os.walk(str(self.workspace.workspace_root)))
+            else:
+                workspace_file_count = 0
+        except Exception:
+            workspace_file_count = 0
+
+        workspace_file_count_delta = workspace_file_count - self._state.prev_workspace_file_count
+
+        # Determine goal progress based on iteration outcomes
+        # For now, we'll use a simple heuristic:
+        # - Successful tool calls indicate progress toward the goal
+        # - Failed tool calls or errors indicate lack of progress or regression
+        # - Positive workspace changes indicate forward progress
+
+        progress_increment = 0.0
+        progress_evidence = []
+
+        # Evidence of forward progress
+        if successful_tool_calls > 0:
+            progress_increment += 0.3 * min(successful_tool_calls, 5) / 5  # Up to 0.3 for successful tool calls
+            progress_evidence.append(f"{successful_tool_calls} successful tool calls")
+
+        if workspace_file_count_delta > 0:
+            progress_increment += 0.2 * min(workspace_file_count_delta, 10) / 10  # Up to 0.2 for workspace growth
+            progress_evidence.append(f"+{workspace_file_count_delta} workspace files")
+
+        # Evidence of lack of progress or regression
+        if failed_tool_calls > 0:
+            # Failed tool calls don't necessarily mean no progress, but they reduce confidence
+            progress_increment -= 0.1 * min(failed_tool_calls, 5) / 5  # Down to -0.1 for failed tool calls
+            progress_evidence.append(f"{failed_tool_calls} failed tool calls (reduces confidence)")
+
+        if workspace_file_count_delta < 0:
+            progress_increment -= 0.1 * min(abs(workspace_file_count_delta), 10) / 10  # Down to -0.1 for file loss
+            progress_evidence.append(f"{abs(workspace_file_count_delta)} workspace files lost")
+
+        if self._state.error_count > self._state.prev_error_count:
+            progress_increment -= 0.2 * min(self._state.error_count - self._state.prev_error_count, 5) / 5  # Down to -0.2 for new errors
+            progress_evidence.append(f"{self._state.error_count - self._state.prev_error_count} new errors")
+
+        # Ensure progress stays in [0, 1] range
+        new_progress = max(0.0, min(1.0, self._state.goal_tracker.progress + progress_increment))
+
+        # Determine goal status based on progress and completion criteria
+        new_status = self._state.goal_tracker.status
+        goal_just_completed = False
+        goal_just_failed = False
+
+        if new_progress >= 1.0:
+            # Check if we have satisfied the completion criteria
+            evidence_for_evaluation = []
+            if successful_tool_calls > 0:
+                evidence_for_evaluation.append(f"Successful tool calls: {successful_tool_calls}")
+            if workspace_file_count_delta > 0:
+                evidence_for_evaluation.append(f"Workspace growth: +{workspace_file_count_delta}")
+
+            is_complete, _ = self._state.goal_tracker.evaluate_completion(evidence_for_evaluation)
+            if is_complete:
+                new_status = GoalStatus.COMPLETED
+                goal_just_completed = True
+        elif self._state.error_count >= self._state.max_consecutive_failures:
+            # Too many consecutive errors indicates failure
+            new_status = GoalStatus.FAILED
+            goal_just_failed = True
+        elif successful_tool_calls > 0 or workspace_file_count_delta > 0:
+            # Any forward progress means we're in progress
+            new_status = GoalStatus.IN_PROGRESS
+        # Otherwise, we remain in the current status (PENDING or IN_PROGRESS)
+
+        # Update the goal tracker
+        self._state.goal_tracker.update(
+            goal_description=self._state.goal_tracker.goal_description,
+            completion_criteria=self._state.goal_tracker.completion_criteria,
+            status=new_status,
+            progress=new_progress,
+            progress_evidence=progress_evidence.copy()
+        )
+
+        # If goal tracker indicates completion or failure, and we're not already in a terminal state,
+        # update the orchestrator's state to follow the goal tracker (but don't override TIMED_OUT or CANCELLED)
+        if goal_just_completed and self._state.state not in [AgentState.TIMED_OUT, AgentState.CANCELLED]:
+            self._state.state = AgentState.COMPLETED
+            self._state.is_complete = True
+            if not self._state.completion_reason:
+                self._state.completion_reason = "Goal completed successfully"
+        elif goal_just_failed and self._state.state not in [AgentState.TIMED_OUT, AgentState.CANCELLED]:
+            self._state.state = AgentState.FAILED
+            self._state.is_complete = True
+            if not self._state.completion_reason:
+                self._state.completion_reason = "Goal failed to be achieved"
 
     def _check_stall(self) -> bool:
-        """Check if the agent has stalled (no progress for too many iterations).
+        """Check if the orchestrator has stalled (no progress for too many iterations).
 
         Returns:
             True if stalled, False otherwise
         """
         if self._state is None:
             return False
-        # If we haven't made any progress yet, we can't stall
-        if self._state.last_progress_iteration == 0:
-            return False
+
+        # Check if we've made progress in the last stall_detection_iterations iterations
         iterations_since_progress = self._state.current_iteration - self._state.last_progress_iteration
         return iterations_since_progress >= self._state.stall_detection_iterations
 
     async def _build_prompt(self) -> str:
-        """Build the LLM prompt from current context and task description.
+        """Build LLM prompt from current context and task description.
 
         Returns:
-            Formatted prompt string for the LLM
+            Formatted prompt for the LLM
         """
         if self._state is None:
-            raise RuntimeError("Orchestrator state not initialized")
+            return ""
 
         # Get context from context manager
-        context_package = self.context_manager.create_context_package(
+        context = self.context_manager.create_context_package(
             task_description=self._state.task_description
         )
-        context_summary = context_package.get_context_summary()
+
+        # Get context summary
+        print(f"DEBUG: context_manager type: {type(self.context_manager)}")
+        print(f"DEBUG: context type: {type(context)}")
+        print(f"DEBUG: context has get_context_summary: {hasattr(context, "get_context_summary")}")
+        context_summary = self.context_manager.get_context_summary(context)
 
         # Build prompt
-        prompt_parts = [
-            f"Task: {self._state.task_description}",
-            "",
-            "Context:",
-            str(context_summary),  # We can format this better if needed
-            "",
-            "Instructions:",
-            "You are an autonomous coding agent. Analyze the task and current context,",
-            "then determine what actions to take. You can use available tools to",
-            "investigate, modify, or create files as needed to complete the task.",
-            "",
-            "Available tools:",
-            self._format_available_tools(),
-            "",
-            "Respond with either:",
-            "1. Tool calls in the format: [tool_name](tool_arguments), or",
-            "2. Reasoning about next steps if no tools are needed, or",
-            "3. A final completion statement if the task is done.",
-            "",
-            f"Iteration: {self._state.current_iteration}/{self._state.max_iterations}",
-            ""
-        ]
+        prompt = f"""Task: {self._state.task_description}
 
-        return "\n".join(prompt_parts)
+Current Iteration: {self._state.current_iteration}
+Max Iterations: {self._state.max_iterations}
+
+Context Summary:
+{json.dumps(context_summary, indent=2)}
+
+Available Tools:
+{self._format_available_tools()}
+
+Please provide the next steps to accomplish the task. If the task is complete, indicate so in your reasoning.
+"""
+        return prompt
+
+    def _record_failure(self, error: Exception, iteration: int) -> None:
+        """Record a failure for pattern detection and analysis.
+
+        Args:
+            error: The error that occurred
+            iteration: The iteration number when the error occurred
+        """
+        if self._state is None:
+            return
+
+        # Record failure details
+        failure_record = {
+            "timestamp": time.time(),
+            "iteration": iteration,
+            "error_type": type(error).__name__,
+            "error_message": str(error),
+            "is_retryable": self._is_retryable_error(error)
+        }
+        self._state.failure_history.append(failure_record)
+
+        # Track failure type counts
+        error_type = type(error).__name__
+        if error_type in self._state.failure_type_counts:
+            self._state.failure_type_counts[error_type] += 1
+        else:
+            self._state.failure_type_counts[error_type] = 1
+
+        # Keep failure history bounded to prevent memory growth
+        if len(self._state.failure_history) > 50:
+            self._state.failure_history = self._state.failure_history[-50:]
+
+    def _generate_alternative_approach(self, context: str) -> str:
+        """Generate an alternative approach prompt based on failure patterns.
+
+        Args:
+            context: The current context summary
+
+        Returns:
+            Modified prompt encouraging alternative approaches
+        """
+        if self._state is None:
+            return context
+
+        # Analyze recent failures to suggest alternatives
+        recent_failures = self._state.failure_history[-5:] if len(self._state.failure_history) >= 5 else self._state.failure_history
+
+        # Generate alternative approach guidance
+        alternative_guidance = "\n\nAlternative Approach Suggestion:\n"
+
+        # Check for tool-related failures
+        tool_errors = [f for f in recent_failures if "tool" in f["error_message"].lower() or
+                      f["error_type"] in ["ToolError", "InternalToolError"]]
+        if tool_errors:
+            alternative_guidance += "- Previous tool executions have failed. Consider:\n"
+            alternative_guidance += "  * Verifying tool parameters and inputs\n"
+            alternative_guidance += "  * Trying different tools to accomplish the same goal\n"
+            alternative_guidance += "  * Checking if required preconditions are met\n"
+
+        # Check for timeout-related failures
+        timeout_errors = [f for f in recent_failures if "timeout" in f["error_message"].lower()]
+        if timeout_errors:
+            alternative_guidance += "- Previous operations have timed out. Consider:\n"
+            alternative_guidance += "  * Breaking down complex operations into smaller steps\n"
+            alternative_guidance += "  * Using more efficient approaches or algorithms\n"
+            alternative_guidance += "  * Checking for infinite loops or inefficient code\n"
+
+        # Check for resource-related failures
+        resource_errors = [f for f in recent_failures if "resource" in f["error_message"].lower() or
+                          "limit" in f["error_message"].lower() or
+                          f["error_type"] == "ResourceLimitError"]
+        if resource_errors:
+            alternative_guidance += "- Resource limits have been exceeded. Consider:\n"
+            alternative_guidance += "  * Optimizing resource usage\n"
+            alternative_guidance += "  * Requesting more resources if possible\n"
+            alternative_guidance += "  * Reducing complexity or scale of operations\n"
+
+        # Check for logic-related failures
+        logic_errors = [f for f in recent_failures if "logic" in f["error_message"].lower() or
+                       f["error_type"] in ["LogicError", "ValidationError"]]
+        if logic_errors:
+            alternative_guidance += "- Logic or validation errors have occurred. Consider:\n"
+            alternative_guidance += "  * Reviewing assumptions and preconditions\n"
+            alternative_guidance += "  * Checking input data validity\n"
+            alternative_guidance += "  * Using more robust error handling\n"
+
+        # If no specific patterns found, provide general guidance
+        if not (tool_errors or timeout_errors or resource_errors or logic_errors):
+            alternative_guidance += "- No specific failure patterns detected. Consider:\n"
+            alternative_guidance += "  * Reviewing the overall approach and strategy\n"
+            alternative_guidance += "  * Consulting documentation or best practices\n"
+            alternative_guidance += "  * Seeking feedback or collaboration\n"
+
+        return alternative_guidance
 
     def _get_available_tools_schema(self) -> List[Dict[str, Any]]:
         """Get the schema of all available tools for the LLM.
@@ -750,6 +1654,14 @@ class AgentOrchestrator:
                 }
                 schemas.append(schema)
         return schemas
+
+    def _detect_fundamental_flaw(self) -> bool:
+        """Detect if there is a fundamental flaw in the current approach based on failure patterns.
+
+        Returns:
+            True if a fundamental flaw is detected (indicating the approach should be changed),
+            False otherwise
+        """
 
     def _format_available_tools(self) -> str:
         """Format available tools for inclusion in prompts.
@@ -914,7 +1826,7 @@ class AgentOrchestrator:
                 "tool_name": f"tool_{i}",  # In reality, we'd have the actual tool name
                 "success": result.success,
                 "has_error": result.error is not None,
-                "data_type": type(result.data).__name__ if result.data is not None else "None"
+                "data_type": str(type(result.data).__name__) if result.data is not None else "None"
             }
             self._state.tool_result_history.append(result_record)
 
@@ -1011,3 +1923,4 @@ def create_agent_orchestrator(
         workspace=workspace,
         max_iterations=max_iterations
     )
+ 

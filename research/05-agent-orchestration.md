@@ -733,3 +733,237 @@ Consider:
 - Metrics for evaluating agent intelligence and capability
 - Mechanisms for ensuring agent alignment with human intentions
 - Approaches for handling uncertainty and ambiguity in task requirements
+
+## 41. Phase 7.3.3: Advanced Failure Recovery Implementation
+
+### Objective
+Implement sophisticated recovery strategies beyond basic retry to handle fundamental flaws in the agent's approach, enabling the orchestrator to detect when standard retry mechanisms are insufficient and generate alternative approaches for task completion.
+
+### Implementation Details
+
+#### Failure History Tracking
+- **failure_history**: List of dictionaries tracking timestamp, iteration, error type, error message, and retryability status for each failure
+- **Bounded to 50 entries** to prevent memory growth
+- **Persisted and recovered** with agent state for continuity across sessions
+
+#### Failure Pattern Detection
+- **failure_type_counts**: Dictionary counting occurrences of each error type in failure history
+- **Used for fundamental flaw detection** to identify persistent error patterns
+
+#### Fundamental Flaw Detection
+The `_detect_fundamental_flaw()` method identifies when standard retry mechanisms are unlikely to succeed by checking:
+1. **Repeated error type**: Any single error type has occurred 3 or more times in failure history
+2. **High non-retryable ratio**: 70% or more of recent failures (up to last 10) are non-retryable
+   - Uses existing `_is_retryable_error()` for classification
+   - With fewer than 10 failures, evaluates all available failures
+
+#### Alternative Approach Generation
+The `_generate_alternative_approach()` method creates contextual guidance based on failure patterns:
+- **Tool-related failures**: Suggest verifying parameters, trying different tools, checking preconditions
+- **Timeout-related failures**: Recommend breaking down operations, using more efficient algorithms, checking for infinite loops
+- **Resource-related failures**: Advise optimizing resource usage, finding efficient solutions, completing partial work
+- **After initial alternatives**: Suggest rethinking the approach, solving simplified versions first, using completely different methodologies
+
+#### Alternative Approach Execution
+The `_attempt_alternative_approach()` method manages recovery attempts:
+- **Resets consecutive error counter** to 0 to give the alternative approach a fair chance
+- **Bounds recovery attempts** to maximum 3 alternative approaches
+- **Returns boolean** indicating whether an alternative approach was attempted
+- **Preserves failure history** while resetting only the consecutive error counter
+
+#### Integration with Existing Systems
+- **Builds on Phase 7.2 foundation**: Uses existing exponential backoff, retry logic, and error classification
+- **Complementary to stall detection**: Operates alongside existing `_check_stall()` mechanism
+- **State persistence compatible**: New fields are included in `_persist_state()` and `_recover_state()` methods
+- **Does not bypass safety systems**: All tool execution still goes through Tool System with proper policy enforcement
+- **Preserves normal failure handling**: Falls back to standard failure recovery after alternative approaches are exhausted
+
+### Recovery Flow
+1. When retries are exhausted and consecutive errors ≥ max_consecutive_failures:
+2. Check if fundamental flaw detected via `_detect_fundamental_flaw()`
+3. If flaw detected and alternatives remain (< 3 attempted):
+   - Attempt alternative approach via `_attempt_alternative_approach()`
+   - Reset consecutive error counter to 0
+   - Continue to next iteration with alternative approach context
+4. If no fundamental flaw or no alternatives remain:
+   - Transition to FAILED state with appropriate completion reason
+
+### Testing
+- **Unit tests**: 15/15 passed in test_orchestrator.py
+- **Trace tests**: 15/15 passed in test_orchestrator_trace.py
+- **Timeout isolated tests**: 1/1 passed in test_timeout_isolated.py
+- **Full test suite**: 257 passed, 0 failed, 4 skipped
+
+### Known Limitations
+- **Hardcoded thresholds**: Failure count threshold (3) and non-retryable ratio (70%) are fixed values
+- **Guidance-based alternatives**: Alternative approaches modify LLM context rather than directly changing tool/model behavior
+- **Pattern detection simplicity**: Uses basic frequency analysis rather than advanced sequence or temporal pattern detection
+
+### Non-Goals (Explicitly Out of Scope for Phase 7.3.3)
+- Full autonomy without human oversight
+- General problem-solving capabilities beyond software engineering
+- Real-time collaboration features requiring persistent connections
+- Advanced planning capabilities requiring significant computational resources
+- Learning across completely unrelated task domains
+- Implementation of Adaptive Iteration Control (Phase 7.3.2)
+- Implementation of Observability and Metrics (Phase 7.3.9)
+
+## 42. Phase 7.3.4: Progress/Goal Tracking + User Interruption/Control
+
+### Phase 7.3.4.1: Progress Tracking Foundation (IMPLEMENTED)
+
+Implemented a focused ProgressMetrics / ProgressTracker abstraction that provides reliable progress information for later stages.
+
+#### Implementation Details
+
+**ProgressMetrics Data Model**
+- Created a compact, serializable ProgressMetrics class that tracks:
+  - Iteration-level metrics (successful/failed/total tool calls)
+  - Workspace change tracking (file count deltas)
+  - Error tracking (count and deltas)
+  - Success rate calculation
+  - Bounded historical metrics for trend analysis (last 10 iterations)
+- Supports serialization/deserialization for persistence/recovery
+- Provides trend calculation (improving/stable/declining)
+- Defines meaningful progress detection based on successful operations, positive workspace changes, or error reduction
+
+**Integration with AgentOrchestratorState**
+- Added progress_metrics: ProgressMetrics field (with default factory)
+- Added previous iteration counters (prev_total_tool_calls, prev_error_count, prev_workspace_file_count) for calculating per-iteration deltas
+- Updated _persist_state() and _recover_state() methods to handle progress metrics persistence
+- Updated _validate_recovered_state() to validate new fields while maintaining backward compatibility
+
+**Integration with Orchestrator**
+- Enhanced _update_progress() method to use ProgressMetrics instead of legacy fields
+- Progress updates occur at appropriate lifecycle boundaries (success and failure paths)
+- Maintains backward compatibility with legacy progress tracking fields
+- Progress reflects actual execution outcomes from tool execution results
+
+**Trend Calculation**
+- Implements simple deterministic trend model based on:
+  - Success rate trend (weighted 0.5)
+  - Workspace change trend (weighted 0.3)
+  - Error trend (weighted 0.2, negative = improving)
+- Returns "improving", "stable", or "declining" based on weighted scoring
+- Avoids machine learning or complex statistical prediction
+
+**Meaningful Progress Definition**
+- Conservative rule: meaningful progress if any of:
+  - Successful relevant tool operations (successful tool calls > 0)
+  - Relevant workspace changes (positive file count delta)
+  - Error reduction (negative error delta)
+- Explicitly does NOT consider:
+  - Repeated identical operations
+  - Failed operations
+  - Unrelated changes
+  - Changes that immediately regress
+
+**Persistence and Recovery**
+- Integrates with existing _persist_state() and _recover_state() methods
+- Progress history is bounded to prevent memory growth
+- Values are validated during recovery
+- Malformed progress data handled gracefully
+- Maintains compatibility with existing Phase 7.3.1 persisted state
+
+**Tests Added**
+- ProgressMetrics initialization and basic functionality
+- Metric updates and delta calculations
+- Current statistics retrieval
+- Trend calculation (improving, stable, declining)
+- Meaningful progress detection
+- Bounded history maintenance
+- Serialization and deserialization
+- Recovery with valid and malformed data
+- Integration with existing orchestrator behavior
+
+#### Integration Points
+- Uses existing iteration/tool execution information from _execute_tool_calls
+- Leverages existing workspace interfaces for file counting (read-only, no direct filesystem access in AgentOrchestrator)
+- Preserves existing AgentOrchestratorState structure and persistence mechanisms
+- Does not modify termination decisions, max iteration calculations, or adaptive iteration budget (reserved for later stages)
+
+#### Known Limitations
+- Trend calculation uses simple weighted scoring rather than advanced statistical methods
+- Meaningful progress definition is conservative and may not capture all nuances of progress
+- Workspace tracking relies on file count changes rather than semantic relevance
+- History size is fixed at 10 iterations (configurable but not exposed externally)
+
+
+### Phase 7.3.4.2: Goal Tracking & Integration (IMPLEMENTED)
+
+Implemented minimal goal tracking to represent task goal and completion state, integrated with existing ProgressMetrics system.
+
+#### Implementation Details
+
+**GoalTracker Data Model**
+- Created a compact, serializable GoalTracker class that tracks:
+  - Goal description: Text description of the task/goal
+  - Completion criteria: List of specific, detectable conditions that indicate goal completion
+  - Status: Current goal status (pending, in_progress, completed, failed)
+  - Progress: Numerical progress value (0.0 to 1.0) representing completion ratio
+  - Progress evidence: List of strings tracking evidence supporting the progress value
+  - Bounded history: Limited history of goal states for serialization/persistence (last 10 iterations)
+
+**Key Features**
+- Minimal, focused design avoiding unnecessary fields
+- Deterministic, serializable, and recoverable state transitions
+- Progress evaluation based on evidence-based criteria
+- Integration with existing termination logic through state transitions
+- Backward compatibility - older states without goal information initialize appropriately
+
+**Goal Progress Evaluation**
+- Completion evaluated based on evidence matching completion criteria
+- Progress calculated as ratio of matched criteria to total criteria (0.0 to 1.0)
+- Status transitions:
+  - pending → in_progress when progress > 0
+  - in_progress → completed when progress >= 1.0 AND all completion criteria are satisfied
+  - in_progress → failed when error count reaches max_consecutive_failures
+- For goals with no completion criteria, progress remains 0.0 and status stays pending
+
+**Integration with AgentOrchestratorState**
+- Added goal_tracker: GoalTracker field (with default factory)
+- Updated _persist_state() and _recover_state() methods to handle goal tracker persistence
+- Updated _validate_recovered_state() to validate new fields while maintaining backward compatibility
+- Goal tracking initialized in execute_task() with task description as goal and basic completion criteria ["Task completed successfully"]
+
+**Integration with Orchestrator**
+- Enhanced _update_goal_tracker() method called after each iteration to update goal progress
+- Goal completion checked in _update_goal_tracker() - sets state to COMPLETED when goal is completed
+- Goal failure checked in _update_goal_tracker() - sets state to FAILED when goal has failed
+- Goal tracking updates occur at appropriate lifecycle boundaries (after each iteration)
+- Works cooperatively with existing adaptive iteration and failure recovery systems
+
+**Persistence and Recovery**
+- Integrates with existing _persist_state() and _recover_state() methods
+- Goal history is bounded to prevent memory growth
+- Values are validated during recovery using type checking and value validation
+- Malformed goal data handled gracefully with safe defaults
+- Maintains compatibility with existing persisted state from earlier phases
+
+**Tests Added**
+- GoalTracker initialization with default and custom values
+- Goal description and completion criteria updates
+- Progress evaluation with various completion criteria combinations
+- Goal status transitions (pending → in_progress → completed/failed)
+- Progress clamping to [0, 1] range
+- History recording and bounded maintenance
+- Serialization and deserialization of goal tracker state
+- Recovery with valid and malformed goal data
+- Integration with orchestrator update and persistence mechanisms
+- Backward compatibility with states lacking goal tracker information
+- Orchestrator-level integration testing
+
+#### Integration Points
+- Uses existing iteration and tool execution information from _update_goal_tracker
+- Leverages existing workspace interfaces for file counting (read-only, no direct filesystem access)
+- Integrates with existing state persistence mechanisms (_persist_state/_recover_state)
+- Cooperates with existing termination logic through state transitions
+- Works with existing adaptive iteration and failure recovery systems
+- Does not modify core orchestrator loop or decision-making processes
+
+#### Known Limitations
+- Completion criteria matching uses simple string matching (case-insensitive substring)
+- Default completion criteria is simplistic: ["Task completed successfully"]
+- Goal description is currently just the task description
+- Progress evidence tracking is basic string-based
+- History size is fixed at 10 iterations (configurable but not exposed externally)
