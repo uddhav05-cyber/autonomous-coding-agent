@@ -1294,6 +1294,81 @@ Symbol-aware extraction is automatically triggered when:
 - Verified deterministic output for identical inputs
 
 #### Key Benefits
+
+### Phase 7.3.5.2.2: Relevance-Guided Extraction (Stage 3 - Context-Window Optimization and Snippet Merging IMPLEMENTED)
+
+Enhanced the Context Selector to implement context-window optimization and snippet merging, providing more relevant context by preserving useful surrounding lines and eliminating redundant overlapping snippets while maintaining deterministic output and respecting existing extraction limits.
+
+#### Implementation Details
+
+**Enhanced ContextSelector Class**
+- Added `_expand_with_context_window()` helper method to expand line ranges with configurable context window
+- Added `_merge_line_ranges()` helper method to merge overlapping or adjacent line ranges
+- Modified `_extract_snippets_from_content` method to apply context window optimization and merging in all three extraction paths:
+  1. Relevance-guided extraction (when keywords or symbols are present)
+  2. Task-description fallback when relevance matches are unavailable
+  3. Original fallback when task description/keywords/symbols are unavailable
+
+**Context-Window Optimization and Snippet Merging Algorithm**
+For all extraction paths:
+1. Generate initial candidate line ranges based on existing relevance logic (Stage 1 & 2)
+2. Expand each range with context window (half of lines_per_snippet on each side) using `_expand_with_context_window()`
+3. Merge overlapping or adjacent expanded ranges using `_merge_line_ranges()`
+4. Limit results to max_snippets_per_file most relevant non-overlapping ranges
+5. Create snippets from final merged ranges
+
+**Context Window Expansion**
+- Context window size: `max(1, lines_per_snippet // 2)` lines on each side
+- Boundaries protected: expansion never exceeds file limits (0 to total_lines-1)
+- Zero context window: skips expansion when context_lines <= 0
+
+**Range Merging**
+- Sorts ranges by start line for deterministic O(n log n) performance
+- Merges overlapping ranges (start <= current_end)
+- Merges adjacent ranges (start == current_end + 1)
+- Preserves all relevant lines without loss
+- Handles nested and duplicate ranges correctly
+
+**Fallback Mechanisms** (Preserve Existing Behavior)
+- All three extraction paths now consistently apply context-window optimization and merging
+- When no relevance exists, falls back to original behavior with optimization applied
+- Extraction limits (lines_per_snippet, max_snippets_per_file) remain authoritative
+- Deterministic output guaranteed through sorting before merging
+
+**Backward Compatibility**
+- All existing interfaces preserved
+- No changes to ContextManager, ContextBudgeter, ContextAssembler, or DuplicatePreventer
+- No modifications to token budgeting systems
+- No semantic duplicate detection - only line-range deduplication
+- Uses existing Phase 3 RelevanceEngine and SymbolDependencyAnalyzer infrastructure
+
+#### Configuration
+Context-window optimization and snippet merging is automatically applied when:
+- `criteria.extract_snippets == True` (default)
+- Works with both keyword relevance (Stage 1) and symbol-level relevance (Stage 2)
+- Context window size derived from existing `lines_per_snippet` criteria parameter
+- No additional configuration required
+
+#### Testing
+- Unit tests: 7/7 passed in test_context_selector.py
+- All existing unit tests continue to pass (270 passed, 0 failed, 4 skipped)
+- All existing integration tests continue to pass (14 passed, 0 failed, 0 skipped)
+- Total test suite: 284 passed, 0 failed, 4 skipped (matches baseline)
+- Verified context-window expansion preserves file boundaries
+- Verified overlapping and adjacent range merging works correctly
+- Verified nested and duplicate range handling
+- Verified extraction limits are respected
+- Verified all three extraction paths implement optimization consistently
+- Verified deterministic output for identical inputs
+
+#### Key Benefits
+- Preserves useful surrounding lines through context window expansion
+- Eliminates redundant overlapping snippets through range merging
+- Maintains deterministic output for reproducible results
+- Works with both keyword and symbol relevance systems
+- Respects existing extraction limits (lines_per_snippet, max_snippets_per_file)
+- Gracefully falls back to existing behavior when no relevance exists
+- No introduction of new relevance or token-budgeting systems
 - More precise context selection at line level with symbol awareness
 - Better alignment between task requirements and extracted code regions using both task keywords and symbol information
 - Improved token efficiency by focusing on code near relevant symbols

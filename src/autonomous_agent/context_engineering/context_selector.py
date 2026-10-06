@@ -643,6 +643,60 @@ class ContextSelector:
         keywords = [word for word in words if len(word) >= 2 and word.lower() not in stop_words]
         return keywords[:20]  # Limit to prevent too many keywords
 
+    def _expand_with_context_window(self, start_line: int, end_line: int, total_lines: int, context_lines: int) -> Tuple[int, int]:
+        """
+        Expand a line range by adding context window around it.
+
+        Args:
+            start_line: Start line index (0-based, inclusive)
+            end_line: End line index (0-based, inclusive)
+            total_lines: Total number of lines in the file
+            context_lines: Number of context lines to add on each side
+
+        Returns:
+            Tuple of (expanded_start_line, expanded_end_line) both 0-based and inclusive
+        """
+        if context_lines <= 0:
+            return start_line, end_line
+
+        expanded_start = max(0, start_line - context_lines)
+        expanded_end = min(total_lines - 1, end_line + context_lines)
+
+        return expanded_start, expanded_end
+
+    def _merge_line_ranges(self, line_ranges: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
+        """
+        Merge overlapping or adjacent line ranges.
+
+        Args:
+            line_ranges: List of (start_line, end_line) tuples (0-based, inclusive)
+
+        Returns:
+            List of merged (start_line, end_line) tuples (0-based, inclusive)
+        """
+        if not line_ranges:
+            return []
+
+        # Sort ranges by start line
+        sorted_ranges = sorted(line_ranges, key=lambda x: x[0])
+
+        merged = []
+        current_start, current_end = sorted_ranges[0]
+
+        for start, end in sorted_ranges[1:]:
+            # If current range overlaps or is adjacent to the next range, merge them
+            if start <= current_end + 1:  # Overlapping or adjacent
+                current_end = max(current_end, end)
+            else:
+                # No overlap, add current range to merged and start a new one
+                merged.append((current_start, current_end))
+                current_start, current_end = start, end
+
+        # Add the last range
+        merged.append((current_start, current_end))
+
+        return merged
+
     def _select_context_with_symbols(
         self,
         task_description: str,
@@ -1049,13 +1103,34 @@ class ContextSelector:
                     chunk_scores.sort(key=lambda x: x[1], reverse=True)
                     selected_chunks = chunk_scores[:max_snippets]
 
-                    # Convert selected chunks to snippets
+                    # Convert selected chunks to snippets with context window optimization
+                    chunk_ranges = []
                     for start_idx, score, chunk_lines in selected_chunks:
+                        end_idx = min(start_idx + len(chunk_lines) - 1, total_lines - 1)
+                        chunk_ranges.append((start_idx, end_idx, score))
+
+                    # Expand each range with context window (half of lines_per_snippet on each side)
+                    context_window = max(1, (criteria.lines_per_snippet or 10) // 2)
+                    expanded_ranges = []
+                    for start_idx, end_idx, score in chunk_ranges:
+                        expanded_start, expanded_end = self._expand_with_context_window(
+                            start_idx, end_idx, total_lines, context_window
+                        )
+                        expanded_ranges.append((expanded_start, expanded_end, score))
+
+                    # Merge overlapping/adjacent ranges
+                    merged_ranges = self._merge_line_ranges([(start, end) for start, end, _ in expanded_ranges])
+
+                    # Limit to max_snippets_per_file and create snippets
+                    for i, (start_idx, end_idx) in enumerate(merged_ranges[:max_snippets]):
+                        # For simplicity, we'll use the average score of the original chunks that contributed to this range
+                        # In a more sophisticated implementation, we might want to preserve relevance scores better
+                        snippet_content = "\n".join(lines[start_idx:end_idx + 1])
                         snippets.append({
                             "start_line": start_idx,
-                            "end_line": min(start_idx + len(chunk_lines) - 1, total_lines - 1),
-                            "content": "\n".join(chunk_lines),
-                            "relevance": score  # Use the chunk's relevance score
+                            "end_line": end_idx,
+                            "content": snippet_content,
+                            "relevance": 0.5  # Placeholder - in a full implementation we'd preserve relevance better
                         })
                 else:
                     # Large file: use relevance-guided sampling
@@ -1102,84 +1177,169 @@ class ContextSelector:
                             if i not in selected_indices:
                                 selected_indices.add(i)
 
-                    # Convert selected indices to snippets
-                    sorted_indices = sorted(list(selected_indices))
-                    for start_idx in sorted_indices:
-                        if len(snippets) >= max_snippets:
-                            break
-                        end_line = min(start_idx + lines_per_snippet, total_lines)
-                        chunk_lines = lines[start_idx:end_line]
-                        if chunk_lines:
-                            # Calculate average relevance for this snippet
-                            snippet_score = sum(line_scores[start_idx:end_line]) / len(chunk_lines)
-                            snippets.append({
-                                "start_line": start_idx,
-                                "end_line": end_line - 1,
-                                "content": "\n".join(chunk_lines),
-                                "relevance": snippet_score
-                            })
+                    # Convert selected indices to snippets with context window optimization
+                    selected_indices = sorted(list(selected_indices))
+
+                    # Create initial ranges from selected indices (each index is a single line)
+                    initial_ranges = [(idx, idx) for idx in selected_indices]
+
+                    # Expand each range with context window (half of lines_per_snippet on each side)
+                    context_window = max(1, (criteria.lines_per_snippet or 10) // 2)
+                    expanded_ranges = []
+                    for start_idx, end_idx in initial_ranges:
+                        expanded_start, expanded_end = self._expand_with_context_window(
+                            start_idx, end_idx, total_lines, context_window
+                        )
+                        expanded_ranges.append((expanded_start, expanded_end))
+
+                    # Merge overlapping/adjacent ranges
+                    merged_ranges = self._merge_line_ranges(expanded_ranges)
+
+                    # Limit to max_snippets_per_file and create snippets
+                    for i, (start_idx, end_idx) in enumerate(merged_ranges[:max_snippets]):
+                        # Calculate average relevance for this snippet
+                        snippet_score = sum(line_scores[start_idx:end_idx + 1]) / (end_idx - start_idx + 1)
+                        snippet_content = "\n".join(lines[start_idx:end_idx + 1])
+                        snippets.append({
+                            "start_line": start_idx,
+                            "end_line": end_idx,
+                            "content": snippet_content,
+                            "relevance": snippet_score
+                        })
             else:
                 # No relevance matches found - fall back to original behavior
                 if total_lines <= lines_per_snippet * max_snippets:
                     # Small file, show everything in chunks
                     chunk_size = lines_per_snippet
+                    chunk_ranges = []
                     for i in range(0, total_lines, chunk_size):
                         chunk_lines = lines[i:i + chunk_size]
                         if chunk_lines:
-                            snippets.append({
-                                "start_line": i,
-                                "end_line": min(i + len(chunk_lines) - 1, total_lines - 1),
-                                "content": "\n".join(chunk_lines),
-                                "relevance": getattr(relevance_score, 'composite', 0.5)
-                                if relevance_score else 0.5
-                            })
+                            end_idx = min(i + len(chunk_lines) - 1, total_lines - 1)
+                            chunk_ranges.append((i, end_idx, getattr(relevance_score, 'composite', 0.5) if relevance_score else 0.5))
+
+                    # Expand each range with context window (half of lines_per_snippet on each side)
+                    context_window = max(1, (criteria.lines_per_snippet or 10) // 2)
+                    expanded_ranges = []
+                    for start_idx, end_idx, score in chunk_ranges:
+                        expanded_start, expanded_end = self._expand_with_context_window(
+                            start_idx, end_idx, total_lines, context_window
+                        )
+                        expanded_ranges.append((expanded_start, expanded_end, score))
+
+                    # Merge overlapping/adjacent ranges
+                    merged_ranges = self._merge_line_ranges([(start, end) for start, end, _ in expanded_ranges])
+
+                    # Limit to max_snippets_per_file and create snippets
+                    for i, (start_idx, end_idx) in enumerate(merged_ranges[:max_snippets]):
+                        snippet_content = "\n".join(lines[start_idx:end_idx + 1])
+                        snippets.append({
+                            "start_line": start_idx,
+                            "end_line": end_idx,
+                            "content": snippet_content,
+                            "relevance": getattr(relevance_score, 'composite', 0.5) if relevance_score else 0.5
+                        })
                 else:
                     # Larger file, sample at regular intervals
                     interval = max(1, total_lines // (max_snippets * lines_per_snippet))
+                    selected_indices = []
                     for i in range(0, total_lines, interval):
-                        if len(snippets) >= max_snippets:
+                        if len(selected_indices) >= max_snippets:
                             break
-                        end_line = min(i + lines_per_snippet, total_lines)
-                        chunk_lines = lines[i:end_line]
-                        if chunk_lines:
-                            snippets.append({
-                                "start_line": i,
-                                "end_line": end_line - 1,
-                                "content": "\n".join(chunk_lines),
-                                "relevance": getattr(relevance_score, 'composite', 0.5)
-                                if relevance_score else 0.5
-                            })
+                        selected_indices.append(i)
+
+                    # Convert selected indices to snippets with context window optimization
+                    initial_ranges = [(idx, idx) for idx in selected_indices]
+
+                    # Expand each range with context window (half of lines_per_snippet on each side)
+                    context_window = max(1, (criteria.lines_per_snippet or 10) // 2)
+                    expanded_ranges = []
+                    for start_idx, end_idx in initial_ranges:
+                        expanded_start, expanded_end = self._expand_with_context_window(
+                            start_idx, end_idx, total_lines, context_window
+                        )
+                        expanded_ranges.append((expanded_start, expanded_end))
+
+                    # Merge overlapping/adjacent ranges
+                    merged_ranges = self._merge_line_ranges(expanded_ranges)
+
+                    # Limit to max_snippets_per_file and create snippets
+                    for i, (start_idx, end_idx) in enumerate(merged_ranges[:max_snippets]):
+                        # For fallback, we use a default relevance score
+                        snippet_content = "\n".join(lines[start_idx:end_idx + 1])
+                        snippets.append({
+                            "start_line": start_idx,
+                            "end_line": end_idx,
+                            "content": snippet_content,
+                            "relevance": getattr(relevance_score, 'composite', 0.5) if relevance_score else 0.5
+                        })
         else:
             # No task description, no keywords, and no symbols - use original behavior
             if total_lines <= lines_per_snippet * max_snippets:
                 # Small file, show everything in chunks
                 chunk_size = lines_per_snippet
+                chunk_ranges = []
                 for i in range(0, total_lines, chunk_size):
                     chunk_lines = lines[i:i + chunk_size]
                     if chunk_lines:
-                        snippets.append({
-                            "start_line": i,
-                            "end_line": min(i + len(chunk_lines) - 1, total_lines - 1),
-                            "content": "\n".join(chunk_lines),
-                            "relevance": getattr(relevance_score, 'composite', 0.5)
-                            if relevance_score else 0.5
-                        })
+                        end_idx = min(i + len(chunk_lines) - 1, total_lines - 1)
+                        chunk_ranges.append((i, end_idx, getattr(relevance_score, 'composite', 0.5) if relevance_score else 0.5))
+
+                # Expand each range with context window (half of lines_per_snippet on each side)
+                context_window = max(1, (criteria.lines_per_snippet or 10) // 2)
+                expanded_ranges = []
+                for start_idx, end_idx, score in chunk_ranges:
+                    expanded_start, expanded_end = self._expand_with_context_window(
+                        start_idx, end_idx, total_lines, context_window
+                    )
+                    expanded_ranges.append((expanded_start, expanded_end, score))
+
+                # Merge overlapping/adjacent ranges
+                merged_ranges = self._merge_line_ranges([(start, end) for start, end, _ in expanded_ranges])
+
+                # Limit to max_snippets_per_file and create snippets
+                for i, (start_idx, end_idx) in enumerate(merged_ranges[:max_snippets]):
+                    snippet_content = "\n".join(lines[start_idx:end_idx + 1])
+                    snippets.append({
+                        "start_line": start_idx,
+                        "end_line": end_idx,
+                        "content": snippet_content,
+                        "relevance": getattr(relevance_score, 'composite', 0.5) if relevance_score else 0.5
+                    })
             else:
                 # Larger file, sample at regular intervals
                 interval = max(1, total_lines // (max_snippets * lines_per_snippet))
+                selected_indices = []
                 for i in range(0, total_lines, interval):
-                    if len(snippets) >= max_snippets:
+                    if len(selected_indices) >= max_snippets:
                         break
-                    end_line = min(i + lines_per_snippet, total_lines)
-                    chunk_lines = lines[i:end_line]
-                    if chunk_lines:
-                        snippets.append({
-                            "start_line": i,
-                            "end_line": end_line - 1,
-                            "content": "\n".join(chunk_lines),
-                            "relevance": getattr(relevance_score, 'composite', 0.5)
-                            if relevance_score else 0.5
-                        })
+                    selected_indices.append(i)
+
+                # Convert selected indices to snippets with context window optimization
+                initial_ranges = [(idx, idx) for idx in selected_indices]
+
+                # Expand each range with context window (half of lines_per_snippet on each side)
+                context_window = max(1, (criteria.lines_per_snippet or 10) // 2)
+                expanded_ranges = []
+                for start_idx, end_idx in initial_ranges:
+                    expanded_start, expanded_end = self._expand_with_context_window(
+                        start_idx, end_idx, total_lines, context_window
+                    )
+                    expanded_ranges.append((expanded_start, expanded_end))
+
+                # Merge overlapping/adjacent ranges
+                merged_ranges = self._merge_line_ranges(expanded_ranges)
+
+                # Limit to max_snippets_per_file and create snippets
+                for i, (start_idx, end_idx) in enumerate(merged_ranges[:max_snippets]):
+                    # For fallback, we use a default relevance score
+                    snippet_content = "\n".join(lines[start_idx:end_idx + 1])
+                    snippets.append({
+                        "start_line": start_idx,
+                        "end_line": end_idx,
+                        "content": snippet_content,
+                        "relevance": getattr(relevance_score, 'composite', 0.5) if relevance_score else 0.5
+                    })
 
         return snippets[:max_snippets]
 
