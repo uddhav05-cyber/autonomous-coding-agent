@@ -286,7 +286,9 @@ class ContextSelector:
                 snippets = self._extract_snippets_from_content(
                     content,
                     type('RelevanceScore', (), {'composite': relevance_score})(),
-                    criteria
+                    criteria,
+                    task_description,
+                    symbols
                 )
                 file_context["snippets"] = snippets
 
@@ -530,6 +532,98 @@ class ContextSelector:
         else:
             return 0.0
 
+    def _calculate_symbol_line_relevance_bonus(
+        self,
+        symbols: List[Symbol],
+        task_keywords: List[str],
+        total_lines: int,
+        criteria: SelectionCriteria
+    ) -> List[float]:
+        """
+        Calculate line-level relevance bonus based on proximity to relevant symbols.
+
+        Args:
+            symbols: List of symbols found in the file
+            task_keywords: Keywords extracted from task description
+            total_lines: Total number of lines in the file
+            criteria: Selection criteria to use
+
+        Returns:
+            List of symbol relevance bonuses for each line (0.0 to 1.0)
+        """
+        # Initialize bonus scores for each line
+        line_bonuses = [0.0] * total_lines
+
+        if not symbols or not task_keywords:
+            return line_bonuses
+
+        # For each symbol, calculate its relevance based on keyword matching
+        symbol_relevances = []
+        for symbol in symbols:
+            # Calculate how relevant this symbol is to the task
+            symbol_relevance = 0.0
+            symbol_name_lower = symbol.name.lower()
+
+            # Check symbol name for keyword matches
+            name_matches = sum(1 for keyword in task_keywords if keyword in symbol_name_lower)
+            if name_matches > 0:
+                symbol_relevance += name_matches * 0.5  # Weight for name matches
+
+            # Check symbol scope for keyword matches if available
+            if symbol.scope:
+                scope_lower = symbol.scope.lower()
+                scope_matches = sum(1 for keyword in task_keywords if keyword in scope_lower)
+                if scope_matches > 0:
+                    symbol_relevance += scope_matches * 0.3  # Weight for scope matches
+
+            # Normalize symbol relevance to 0-1 range
+            # We'll use a simple approach: if any matches, relevance is at least 0.1
+            if symbol_relevance > 0:
+                symbol_relevance = min(1.0, 0.1 + (symbol_relevance * 0.1))
+            else:
+                symbol_relevance = 0.0
+
+            symbol_relevances.append((symbol, symbol_relevance))
+
+        # For each relevant symbol, add bonus to nearby lines
+        for symbol, symbol_relevance in symbol_relevances:
+            if symbol_relevance > 0:
+                # Determine symbol's line range
+                start_line = symbol.line_number - 1  # Convert to 0-based indexing
+                end_line = (symbol.end_line_number or symbol.line_number) - 1  # Convert to 0-based indexing
+
+                # Ensure line numbers are within bounds
+                start_line = max(0, min(start_line, total_lines - 1))
+                end_line = max(0, min(end_line, total_lines - 1))
+
+                # Define proximity range - how many lines around the symbol to consider
+                # We'll use a range that decreases with distance
+                proximity_range = 5  # Look at 5 lines before and after
+
+                # Apply bonus to lines near the symbol
+                for line_idx in range(max(0, start_line - proximity_range),
+                                  min(total_lines, end_line + proximity_range + 1)):
+                    # Calculate distance from symbol range
+                    if line_idx < start_line:
+                        distance = start_line - line_idx
+                    elif line_idx > end_line:
+                        distance = line_idx - end_line
+                    else:
+                        distance = 0  # Inside symbol range
+
+                    # Calculate bonus based on inverse distance (closer = higher bonus)
+                    # Max bonus when distance = 0, decreases linearly with distance
+                    if distance <= proximity_range:
+                        distance_factor = 1.0 - (distance / proximity_range)
+                        line_bonus = symbol_relevance * distance_factor * 0.3  # Weight for symbol proximity
+                        line_bonuses[line_idx] += line_bonus
+
+        # Ensure bonuses don't exceed 1.0
+        for i in range(total_lines):
+            line_bonuses[i] = min(1.0, line_bonuses[i])
+
+        return line_bonuses
+
     def _extract_keywords(self, text: str) -> List[str]:
         """
         Extract keywords from text for symbol matching.
@@ -639,10 +733,19 @@ class ContextSelector:
                 file_path = Path(file_context["path"])
                 try:
                     content = file_path.read_text(encoding='utf-8')
+                    # Extract symbols for this file if symbol analyzer is available
+                    symbols_to_pass = []
+                    if self.symbol_analyzer:
+                        try:
+                            symbols_to_pass = self.symbol_analyzer.analyze_file_symbols(file_path)
+                        except Exception:
+                            symbols_to_pass = []
                     snippets = self._extract_snippets_from_content(
                         content,
                         type('RelevanceScore', (), {'composite': file_context.get('relevance_score', 0.5)})(),
-                        criteria
+                        criteria,
+                        task_description,
+                        symbols_to_pass
                     )
                     file_context["snippets"] = snippets
                     selected_context["snippets"].extend(snippets)
@@ -814,7 +917,8 @@ class ContextSelector:
                         content,
                         type('RelevanceScore', (), {'composite': file_context.get('relevance_score', 0.5)})(),
                         criteria,
-                        task_description
+                        task_description,
+                        []  # We don't have easy access to symbols here without re-analyzing
                     )
                     file_context["snippets"] = snippets
                     selected_context["snippets"].extend(snippets)
@@ -829,7 +933,8 @@ class ContextSelector:
         file_path: Path,
         relevance_score: Any,
         criteria: SelectionCriteria,
-        task_description: str = ""
+        task_description: str = "",
+        symbols: List[Symbol] = None
     ) -> List[Dict[str, Any]]:
         """
         Extract code snippets from a file.
@@ -839,6 +944,7 @@ class ContextSelector:
             relevance_score: Relevance score for the file
             criteria: Selection criteria
             task_description: Description of the current task for relevance-guided extraction
+            symbols: List of symbols in the file for symbol-aware extraction
 
         Returns:
             List of snippet dictionaries
@@ -849,7 +955,7 @@ class ContextSelector:
 
             content = file_path.read_text(encoding='utf-8')
             return self._extract_snippets_from_content(
-                content, relevance_score, criteria, task_description
+                content, relevance_score, criteria, task_description, symbols or []
             )
         except Exception:
             return []
@@ -859,7 +965,8 @@ class ContextSelector:
         content: str,
         relevance_score: Any,
         criteria: SelectionCriteria,
-        task_description: str = ""
+        task_description: str = "",
+        symbols: List[Symbol] = None
     ) -> List[Dict[str, Any]]:
         """
         Extract code snippets from file content.
@@ -869,6 +976,7 @@ class ContextSelector:
             relevance_score: Relevance score for the file
             criteria: Selection criteria
             task_description: Description of the current task for relevance-guided extraction
+            symbols: List of symbols in the file for symbol-aware extraction
 
         Returns:
             List of snippet dictionaries
@@ -890,21 +998,41 @@ class ContextSelector:
         if task_description:
             task_keywords = self._extract_keywords(task_description.lower())
 
-        # If we have keywords, use relevance-guided extraction
-        if task_keywords:
-            # Score each line based on keyword matches
+        # If we have keywords or symbols, use enhanced relevance-guided extraction
+        if task_keywords or (symbols and criteria.use_symbol_level_selection):
+            # Score each line based on keyword matches and symbol proximity
             line_scores = [0.0] * total_lines
-            for i, line in enumerate(lines):
-                line_lower = line.lower()
-                # Count keyword matches in this line
-                matches = sum(1 for keyword in task_keywords if keyword in line_lower)
-                # Normalize by line length to avoid bias toward longer lines
-                if len(line) > 0:
-                    line_scores[i] = matches / len(line)
-                else:
-                    line_scores[i] = float(matches)  # For empty lines, just count matches
 
-            # If we found any keyword matches, use relevance-guided extraction
+            # First, score based on task keywords
+            if task_keywords:
+                for i, line in enumerate(lines):
+                    line_lower = line.lower()
+                    # Count keyword matches in this line
+                    matches = sum(1 for keyword in task_keywords if keyword in line_lower)
+                    # Normalize by line length to avoid bias toward longer lines
+                    if len(line) > 0:
+                        line_scores[i] = matches / len(line)
+                    else:
+                        line_scores[i] = float(matches)  # For empty lines, just count matches
+
+            # Then, add symbol-based relevance if symbols are available
+            if symbols and criteria.use_symbol_level_selection:
+                symbol_bonus_scores = self._calculate_symbol_line_relevance_bonus(
+                    symbols, task_keywords, total_lines, criteria
+                )
+                # Combine keyword scores with symbol bonus (weighted by symbol_similarity_weight)
+                for i in range(total_lines):
+                    if task_keywords:
+                        # If we have keyword scores, combine them with symbol bonus
+                        keyword_score = line_scores[i]
+                        symbol_bonus = symbol_bonus_scores[i]
+                        # Weighted combination: keyword_score + (symbol_bonus * weight)
+                        line_scores[i] = keyword_score + (symbol_bonus * criteria.symbol_similarity_weight)
+                    else:
+                        # If we only have symbols, use symbol bonus directly
+                        line_scores[i] = symbol_bonus_scores[i]
+
+            # If we found any relevance matches, use relevance-guided extraction
             if any(score > 0 for score in line_scores):
                 if total_lines <= lines_per_snippet * max_snippets:
                     # Small file: evaluate all possible chunks and pick the best ones
@@ -937,7 +1065,7 @@ class ContextSelector:
                         # Normalize to get probabilities
                         line_probabilities = [score / total_score for score in line_scores]
                     else:
-                        # Fallback to uniform distribution if no keyword matches found
+                        # Fallback to uniform distribution if no relevance matches found
                         line_probabilities = [1.0 / total_lines] * total_lines
 
                     # Determine how many samples to take
@@ -952,8 +1080,7 @@ class ContextSelector:
                     max_attempts = num_samples * 3  # Prevent infinite loop
 
                     while len(selected_indices) < num_samples and attempts < max_attempts:
-                        # Weighted random selection would be ideal, but for determinism,
-                        # we'll select the highest scoring lines that haven't been chosen yet
+                        # For determinism, select the highest scoring lines that haven't been chosen yet
                         # Create list of (index, score) pairs for unselected indices
                         unselected_scores = [(i, line_scores[i]) for i in range(total_lines) if i not in selected_indices]
                         if not unselected_scores:
@@ -992,7 +1119,7 @@ class ContextSelector:
                                 "relevance": snippet_score
                             })
             else:
-                # No keyword matches found in any line - fall back to original behavior
+                # No relevance matches found - fall back to original behavior
                 if total_lines <= lines_per_snippet * max_snippets:
                     # Small file, show everything in chunks
                     chunk_size = lines_per_snippet
@@ -1023,7 +1150,7 @@ class ContextSelector:
                                 if relevance_score else 0.5
                             })
         else:
-            # No task description or no keywords extracted - use original behavior
+            # No task description, no keywords, and no symbols - use original behavior
             if total_lines <= lines_per_snippet * max_snippets:
                 # Small file, show everything in chunks
                 chunk_size = lines_per_snippet

@@ -1233,8 +1233,80 @@ Relevance-guided extraction is automatically triggered when:
 #### Configuration
 Relevance-guided extraction happens automatically when task_description is provided to the ContextSelector.select_context() method.
 
+### Phase 7.3.5.2.2: Relevance-Guided Extraction (Stage 2 - Symbol-Aware Extraction IMPLEMENTED)
+
+Enhanced the Context Selector to use symbol information from Phase 3 SymbolDependencyAnalyzer to guide which regions of a selected file are extracted, providing even more precise context extraction when symbol information is available.
+
+#### Implementation Details
+
+**Enhanced ContextSelector Class**
+- Modified `_extract_snippets_from_content` method to accept an optional `symbols` parameter
+- Enhanced line scoring algorithm to combine task keyword relevance with symbol proximity bonuses
+- Updated all snippet extraction call sites to pass symbol information when available
+- Added `_calculate_symbol_line_relevance_bonus` helper method to compute symbol-based line relevance
+
+**Symbol-Aware Extraction Algorithm**
+When both task description keywords and symbol information are available:
+1. Extract keywords from task description using existing `_extract_keywords` method
+2. Score each line based on keyword matches (normalized by line length to avoid bias)
+3. Calculate symbol relevance bonus based on proximity to relevant symbols:
+   - A symbol is considered relevant if its name or scope contains task keywords
+   - Relevance decreases with distance from the symbol's line range
+   - Configurable weighting via existing `symbol_similarity_weight` in SelectionCriteria
+4. Combine keyword relevance and symbol bonus (capped at 1.0)
+5. For small files (lines ≤ lines_per_snippet × max_snippets_per_file):
+   - Evaluate all possible chunks and select top-scoring ones by combined line relevance
+6. For large files (lines > lines_per_snippet × max_snippets_per_file):
+   - Create probability distribution based on combined line scores
+   - Select highest scoring lines first (deterministic)
+   - Fill remaining slots with uniform sampling if needed
+   - Respect lines_per_snippet and max_snippets_per_file constraints
+
+**Fallback Mechanisms** (Preserve Existing Behavior)
+- When task_description is empty → Original extraction behavior
+- When no keywords extracted from task_description → Symbol-aware extraction if symbols available
+- When keywords exist but no matches found in content → Symbol-aware extraction if symbols available
+- When no symbols available → Keyword-only relevance-guided extraction (Stage 1)
+- When neither keywords nor symbols available → Original extraction behavior
+- When relevance-guided sampling insufficient → Supplement with uniform sampling
+- All existing criteria parameters (lines_per_snippet, max_snippets_per_file) respected
+
+**Backward Compatibility**
+- All existing interfaces preserved
+- Existing functionality unchanged when task_description or symbols not usable
+- No changes to ContextManager, ContextBudgeter, ContextAssembler, or DuplicatePreventer
+- No modifications to token budgeting systems
+- No duplicate analyzer creation - uses existing Phase 3 SymbolDependencyAnalyzer output
+
+#### Configuration
+Symbol-aware extraction is automatically triggered when:
+- `criteria.extract_snippets == True` (default)
+- `task_description` parameter is provided and/or symbol information is available from Phase 3
+- `criteria.use_symbol_level_selection == True` (default)
+
+#### Testing
+- Unit tests: 7/7 passed in test_context_selector.py
+- All existing unit tests continue to pass (270 passed, 0 failed, 4 skipped)
+- All existing integration tests continue to pass (14 passed, 0 failed, 0 skipped)
+- Total test suite: 284 passed, 0 failed, 4 skipped (matches baseline)
+- Verified symbol-aware extraction selects more relevant regions when symbols match task keywords
+- Verified fallback mechanisms work correctly when symbol information unavailable
+- Verified deterministic output for identical inputs
+
+#### Key Benefits
+- More precise context selection at line level with symbol awareness
+- Better alignment between task requirements and extracted code regions using both task keywords and symbol information
+- Improved token efficiency by focusing on code near relevant symbols
+- Maintains all existing extraction capabilities as fallback
+- Leverages existing Phase 3 Symbol Dependency Analyzer infrastructure without duplication
+
+#### Non-Goals (Explicitly Out of Scope for Stage 2)
+- Implementation of context-window optimization/snippet merging (Phase 7.3.5.2.2 Stage 3)
+- Changes to Context Budgeting or Context Assembly systems
+- Creation of semantic duplicate detectors or vector search capabilities
+- Machine learning ranking or embeddings-based relevance scoring
+
 #### Non-Goals (Explicitly Out of Scope for Stage 1)
-- Implementation of symbol-aware extraction (Phase 7.3.5.2.2 Stage 2)
 - Implementation of context-window optimization/snippet merging (Phase 7.3.5.2.2 Stage 3)
 - Changes to Context Budgeting or Context Assembly systems
 - Creation of semantic duplicate detectors or vector search capabilities
