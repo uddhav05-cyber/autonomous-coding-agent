@@ -1084,3 +1084,88 @@ Implemented user interruption and control mechanisms to allow safe user-driven c
 - No mid-tool-execution or mid-model-invocation interruption
 - Stop-after-iteration completes current iteration fully before stopping
 - Control state increases persistence footprint slightly (3 boolean fields)
+
+## 43. Phase 7.3.5: Context Optimization Enhancements
+
+### Phase 7.3.5.2.1: Symbol-Level Context Selection (IMPLEMENTED)
+
+Enhanced the Context Selector to support symbol-level context selection using Phase 3 Symbol Dependency Analyzer output, providing more granular context selection capabilities beyond file-level selection.
+
+#### Implementation Details
+
+**Enhanced ContextSelector Class**
+- Modified `__init__` method to accept optional `symbol_analyzer` parameter for Phase 3 Symbol Dependency Analyzer integration
+- Updated `SelectionCriteria` dataclass:
+  - Added `use_symbol_level_selection` boolean field (defaults to True)
+  - Added `symbol_similarity_weight` float field (defaults to 0.1, range 0.0-1.0)
+  - Updated `__hash__` method to include new fields for proper caching
+- Enhanced `select_context` method with multi-scenario handling:
+  - Uses both relevance engine and symbol analyzer when both are available
+  - Falls back to relevance-only selection when symbol analyzer unavailable
+  - Falls back to symbol-only selection when relevance engine unavailable
+  - Uses basic selection when neither analyzer is available
+- Added helper methods for symbol-based selection:
+  - `_select_context_with_symbols`: Combines relevance scores with symbol similarity bonuses
+  - `_select_context_relevance_only`: Uses relevance engine exclusively (fallback)
+  - `_select_context_symbols_only`: Uses symbol analyzer exclusively (fallback)
+  - `_get_file_context_enhanced`: Extracts file context with symbol information
+  - `_get_file_context_basic`: Extracts file context without symbol information (fallback)
+  - `_extract_file_symbols`: Now functional, uses symbol_analyzer when available
+  - `_format_symbols_for_output`: Formats Symbol objects for context output
+  - `_is_within_workspace`: Checks if file is within workspace boundaries
+  - `_calculate_symbol_relevance_bonus`: Computes symbol-task similarity bonus
+  - `_extract_keywords`: Extracts keywords from task description for symbol matching
+- Preserved all existing methods for backward compatibility:
+  - `_extract_file_snippets`, `_extract_snippets_from_content`, `_detect_language`, `_get_repository_info`, `__repr__`
+
+**Symbol-Level Selection Algorithm**
+When both relevance engine and symbol analyzer are available:
+1. Calculate base relevance scores for all files using Phase 3 RelevanceEngine
+2. Extract symbols for each file using Phase 3 SymbolDependencyAnalyzer
+3. Calculate symbol relevance bonus based on keyword matching between task description and symbol names/scopes
+4. Combine relevance score and symbol bonus (capped at 1.0)
+5. Select files based on combined score meeting minimum relevance threshold
+6. Apply maximum files limit
+7. Extract detailed context (including symbols and snippets) for selected files
+
+**Fallback Mechanisms**
+- When symbol analyzer unavailable: Uses relevance engine only (existing behavior)
+- When relevance engine unavailable: Uses symbol analyzer only (new capability)
+- When neither available: Falls back to basic file selection (existing behavior)
+- Symbol analysis failures gracefully handled with empty symbol lists
+
+**Backward Compatibility**
+- All existing interfaces preserved
+- Symbol-level selection configurable via `use_symbol_level_selection` flag
+- Existing functionality unchanged when symbol analyzer not provided
+- No changes to ContextManager, ContextBudgeter, ContextAssembler, or DuplicatePreventer
+- No duplicate SymbolAnalyzer creation - consumes Phase 3 output directly
+
+**Testing**
+- Unit tests: 7/7 passed in test_context_selector.py
+- All existing tests continue to pass, confirming no regressions
+- Verified symbol-level selection enhances context relevance when symbol information available
+- Verified fallback mechanisms work correctly when analyzers unavailable
+
+#### Key Benefits
+- More precise context selection at symbol/function level rather than file level
+- Better alignment between task requirements and selected context
+- Improved token efficiency by selecting only relevant symbols within files
+- Maintains all existing file-level selection capabilities as fallback
+- Leverages existing Phase 3 infrastructure without duplication
+
+#### Configuration
+Symbol-level selection can be controlled through SelectionCriteria:
+```python
+criteria = SelectionCriteria(
+    use_symbol_level_selection=True,    # Enable/disable symbol-level selection
+    symbol_similarity_weight=0.1        # Weight for symbol similarity signal (0.0-1.0)
+)
+```
+
+#### Non-Goals (Explicitly Out of Scope for Phase 7.3.5.2.1)
+- Implementation of Context Budgeting enhancements (Phase 7.3.5.2.2)
+- Implementation of Context Assembly enhancements (Phase 7.3.5.2.3)
+- Redesign of ContextManager architecture
+- Creation of duplicate SymbolAnalyzer
+- Changes to existing ContextSelector methods beyond those specified

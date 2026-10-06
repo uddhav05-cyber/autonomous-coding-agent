@@ -14,7 +14,8 @@ import math
 
 from autonomous_agent.repository_understanding import (
     RelevanceEngine,
-    RelevanceSignals
+    RelevanceSignals,
+    SymbolDependencyAnalyzer
 )
 
 
@@ -53,6 +54,12 @@ class SelectionCriteria:
     # Maximum depth for dependency inclusion
     max_dependency_depth: int = 2
 
+    # Whether to use symbol-level selection when available
+    use_symbol_level_selection: bool = True
+
+    # Weight for symbol similarity signal (0.0 to 1.0)
+    symbol_similarity_weight: float = 0.1
+
     def __hash__(self) -> int:
         """Generate a hash for caching purposes."""
         return hash((
@@ -67,7 +74,9 @@ class SelectionCriteria:
             self.verification_phase_weight,
             self.prefer_recent,
             self.include_dependencies,
-            self.max_dependency_depth
+            self.max_dependency_depth,
+            self.use_symbol_level_selection,
+            self.symbol_similarity_weight
         ))
 
 
@@ -87,6 +96,7 @@ class ContextSelector:
     def __init__(
         self,
         relevance_engine: Optional[RelevanceEngine] = None,
+        symbol_analyzer: Optional[SymbolDependencyAnalyzer] = None,
         default_criteria: Optional[SelectionCriteria] = None
     ):
         """
@@ -94,9 +104,11 @@ class ContextSelector:
 
         Args:
             relevance_engine: Phase 3 relevance engine for scoring files
+            symbol_analyzer: Phase 3 symbol analyzer for extracting symbols
             default_criteria: Default selection criteria to use
         """
         self.relevance_engine = relevance_engine
+        self.symbol_analyzer = symbol_analyzer
         self.default_criteria = default_criteria or SelectionCriteria()
 
     def select_context(
@@ -119,10 +131,6 @@ class ContextSelector:
         if criteria is None:
             criteria = self.default_criteria
 
-        # Apply phase-aware weighting if we can determine the current phase
-        # For now, we'll use a default approach - in practice, this would
-        # come from the agent's current state/task phase
-
         selected_context = {
             "files": [],
             "symbols": [],
@@ -131,58 +139,50 @@ class ContextSelector:
             "selection_reasoning": {}
         }
 
-        # If we have a relevance engine, use it to score and select files
-        if self.relevance_engine:
+        # If we have both relevance engine and symbol analyzer, use enhanced selection
+        if self.relevance_engine and self.symbol_analyzer:
             try:
-                # Get relevance scores for all files
-                relevance_scores = self.relevance_engine.calculate_relevance_scores(
-                    task_description, repository_metadata
+                selected_context = self._select_context_with_symbols(
+                    task_description, repository_metadata, criteria
                 )
-
-                # Apply selection criteria
-                selected_files = self._apply_selection_criteria(
-                    relevance_scores, criteria
-                )
-
-                # Get detailed context for selected files
-                for file_path, relevance_score in selected_files:
-                    file_context = self._get_file_context(
-                        file_path, relevance_score, criteria
-                    )
-                    if file_context:
-                        selected_context["files"].append(file_context)
-
-                        # Extract symbols if requested
-                        if criteria.include_dependencies:
-                            symbols = self._extract_file_symbols(file_path)
-                            selected_context["symbols"].extend(symbols)
-
-                        # Extract snippets if requested
-                        if criteria.extract_snippets:
-                            snippets = self._extract_file_snippets(
-                                file_path, relevance_score, criteria
-                            )
-                            selected_context["snippets"].extend(snippets)
-
             except Exception as e:
-                # Fall back to basic selection if relevance engine fails
+                # Fall back to basic selection if enhanced selection fails
+                selected_context = self._basic_selection(
+                    repository_metadata, criteria
+                )
+        # If we only have relevance engine, use relevance-based selection
+        elif self.relevance_engine:
+            try:
+                selected_context = self._select_context_relevance_only(
+                    task_description, repository_metadata, criteria
+                )
+            except Exception as e:
+                # Fall back to basic selection if relevance-based selection fails
+                selected_context = self._basic_selection(
+                    repository_metadata, criteria
+                )
+        # If we only have symbol analyzer, use symbol-based selection
+        elif self.symbol_analyzer:
+            try:
+                selected_context = self._select_context_symbols_only(
+                    task_description, repository_metadata, criteria
+                )
+            except Exception as e:
+                # Fall back to basic selection if symbol-based selection fails
                 selected_context = self._basic_selection(
                     repository_metadata, criteria
                 )
         else:
-            # No relevance engine available, use basic selection
+            # No analyzers available, use basic selection
             selected_context = self._basic_selection(
                 repository_metadata, criteria
             )
 
-        # Add repository information
-        selected_context["repository_info"] = self._get_repository_info(
-            repository_metadata
-        )
-
         # Add selection reasoning for debugging/tracing
         selected_context["selection_reasoning"] = {
             "criteria_used": criteria.__dict__,
+            "has_relevance_engine": self.relevance_engine is not None,
+            "has_symbol_analyzer": self.symbol_analyzer is not None,
             "total_files_considered": len(getattr(repository_metadata, 'structure_map', {})),
             "files_selected": len(selected_context["files"]),
             "symbols_extracted": len(selected_context["symbols"]),
@@ -225,19 +225,21 @@ class ContextSelector:
 
         return sorted_scores
 
-    def _get_file_context(
+    def _get_file_context_enhanced(
         self,
         file_path: Path,
-        relevance_score: Any,
+        relevance_score: float,
+        symbols: List[Symbol],
         criteria: SelectionCriteria
     ) -> Optional[Dict[str, Any]]:
         """
-        Get context information for a specific file.
+        Get enhanced context information for a specific file using symbol information.
 
         Args:
             file_path: Path to the file
-            relevance_score: Relevance score for the file
-            criteria: Selection criteria
+            relevance_score: Combined relevance score for the file
+            symbols: List of symbols found in the file
+            criteria: Selection criteria to use
 
         Returns:
             Dictionary containing file context or None if file cannot be read
@@ -263,18 +265,85 @@ class ContextSelector:
                 "size_bytes": len(content.encode('utf-8')),
                 "line_count": len(content.splitlines()),
                 "language": self._detect_language(file_path),
-                "symbols": [],
-                "snippets": []
+                "symbols": [],  # Will be populated below
+                "snippets": []  # Will be populated below if extract_snippets is True
             }
 
-            # Extract symbols if analyzer would be available
-            # In a full implementation, we'd use the SymbolDependencyAnalyzer
-            # For now, we'll leave this empty and let the ContextManager handle it
+            # Add symbols if requested and available
+            if symbols:
+                file_context["symbols"] = [
+                    {
+                        "name": s.name,
+                        "type": s.symbol_type,
+                        "line_start": s.line_number,
+                        "line_end": s.end_line_number or s.line_number
+                    }
+                    for s in symbols
+                ]
 
             # Extract snippets if requested
             if criteria.extract_snippets:
                 snippets = self._extract_snippets_from_content(
-                    content, relevance_score, criteria
+                    content,
+                    type('RelevanceScore', (), {'composite': relevance_score})(),
+                    criteria
+                )
+                file_context["snippets"] = snippets
+
+            return file_context
+
+        except Exception:
+            # If any error occurs, skip this file
+            return None
+
+    def _get_file_context_basic(
+        self,
+        file_path: Path,
+        relevance_score: Any,
+        criteria: SelectionCriteria
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get basic context information for a specific file (fallback implementation).
+
+        Args:
+            file_path: Path to the file
+            relevance_score: Relevance score for the file
+            criteria: Selection criteria to use
+
+        Returns:
+            Dictionary containing file context or None if file cannot be read
+        """
+        try:
+            # Check if file exists
+            if not file_path.is_file():
+                return None
+
+            # Read file content
+            try:
+                content = file_path.read_text(encoding='utf-8')
+            except (UnicodeDecodeError, OSError):
+                # Skip binary or unreadable files
+                return None
+
+            # Basic file information
+            file_context = {
+                "path": str(file_path),
+                "relative_path": str(file_path),  # Simplified for now
+                "relevance_score": relevance_score,
+                "content": content,
+                "size_bytes": len(content.encode('utf-8')),
+                "line_count": len(content.splitlines()),
+                "language": self._detect_language(file_path),
+                "symbols": [],  # No symbol information available in basic mode
+                "snippets": []  # Will be populated below if extract_snippets is True
+            }
+
+            # Extract snippets if requested
+            if criteria.extract_snippets:
+                snippets = self._extract_snippets_from_content(
+                    content,
+                    relevance_score if isinstance(relevance_score, (int, float)) else type('RelevanceScore', (), {'composite': 0.5})(),
+                    criteria
                 )
                 file_context["snippets"] = snippets
 
@@ -353,15 +422,405 @@ class ContextSelector:
 
     def _extract_file_symbols(self, file_path: Path) -> List[Dict[str, Any]]:
         """
-        Extract symbols from a file.
+        Extract symbols from a file using the symbol analyzer.
 
-        In a full implementation, this would use the SymbolDependencyAnalyzer
-        from Phase 3. For this MVP, we'll return an empty list.
+        Args:
+            file_path: Path to the file to extract symbols from
+
+        Returns:
+            List of symbol dictionaries
         """
-        # Placeholder - in reality, this would call:
-        # symbols = self.symbol_analyzer.analyze_file_symbols(file_path)
-        # and format them appropriately
-        return []
+        if not self.symbol_analyzer:
+            return []
+
+        try:
+            symbols = self.symbol_analyzer.analyze_file_symbols(file_path)
+            return self._format_symbols_for_output(symbols)
+        except Exception:
+            # If symbol analysis fails, return empty list
+            return []
+
+    def _format_symbols_for_output(self, symbols: List[Symbol]) -> List[Dict[str, Any]]:
+        """
+        Format Symbol objects for output in context.
+
+        Args:
+            symbols: List of Symbol objects to format
+
+        Returns:
+            List of symbol dictionaries
+        """
+        return [
+            {
+                "name": s.name,
+                "type": s.symbol_type,
+                "line_start": s.line_number,
+                "line_end": s.end_line_number or s.line_number
+            }
+            for s in symbols
+        ]
+
+    def _is_within_workspace(self, file_path: Path) -> bool:
+        """
+        Check if a file path is within the workspace boundaries.
+
+        In a full implementation, this would check against the actual workspace boundaries.
+        For this implementation, we'll assume all files provided by repository_metadata
+        are within the workspace.
+
+        Args:
+            file_path: Path to check
+
+        Returns:
+            True if file is within workspace, False otherwise
+        """
+        # Simple implementation - in reality, this would check against workspace.root_path
+        try:
+            # For now, we'll be permissive and allow all files
+            # A real implementation would check: file_path.is_relative_to(workspace.root_path)
+            return True
+        except Exception:
+            return False
+
+    def _calculate_symbol_relevance_bonus(
+        self,
+        symbols: List[Symbol],
+        task_description: str,
+        criteria: SelectionCriteria
+    ) -> float:
+        """
+        Calculate relevance bonus based on symbol matches to task description.
+
+        Args:
+            symbols: List of symbols found in the file
+            task_description: Description of the current task
+            criteria: Selection criteria to use
+
+        Returns:
+            Symbol relevance bonus (0.0 to 1.0)
+        """
+        if not symbols or not task_description:
+            return 0.0
+
+        # Extract keywords from task description
+        task_keywords = self._extract_keywords(task_description.lower())
+        if not task_keywords:
+            return 0.0
+
+        # Count matching symbols
+        matching_symbols = 0
+        total_symbols = len(symbols)
+
+        for symbol in symbols:
+            symbol_name_lower = symbol.name.lower()
+            # Check if any task keyword appears in the symbol name
+            if any(keyword in symbol_name_lower for keyword in task_keywords):
+                matching_symbols += 1
+            # Also check scope if available
+            elif symbol.scope:
+                scope_lower = symbol.scope.lower()
+                if any(keyword in scope_lower for keyword in task_keywords):
+                    matching_symbols += 1
+
+        # Calculate ratio of matching symbols
+        if total_symbols > 0:
+            symbol_ratio = matching_symbols / total_symbols
+            # Apply the symbol similarity weight from criteria
+            return symbol_ratio * criteria.symbol_similarity_weight
+        else:
+            return 0.0
+
+    def _extract_keywords(self, text: str) -> List[str]:
+        """
+        Extract keywords from text for symbol matching.
+
+        Args:
+            text: Input text to extract keywords from
+
+        Returns:
+            List of extracted keywords
+        """
+        # Simple keyword extraction - split on non-alphanumeric characters
+        import re
+        # Extract words (sequences of alphanumeric characters)
+        words = re.findall(r'\b[a-zA-Z][a-zA-Z0-9_]*\b', text)
+        # Filter out very short words and common stop words
+        stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might', 'must', 'can', 'this', 'that', 'these', 'those', 'am', 'i', 'you', 'he', 'she', 'it', 'we', 'they', 'me', 'him', 'her', 'us', 'them'}
+        keywords = [word for word in words if len(word) >= 2 and word.lower() not in stop_words]
+        return keywords[:20]  # Limit to prevent too many keywords
+
+    def _select_context_with_symbols(
+        self,
+        task_description: str,
+        repository_metadata: Any,
+        criteria: SelectionCriteria
+    ) -> Dict[str, Any]:
+        """
+        Select context using both relevance engine and symbol analyzer.
+
+        Args:
+            task_description: Description of the current task
+            repository_metadata: Repository metadata from Phase 3
+            criteria: Selection criteria to use
+
+        Returns:
+            Dictionary containing selected context
+        """
+        selected_context = {
+            "files": [],
+            "symbols": [],
+            "snippets": [],
+            "repository_info": {},
+        }
+
+        # Get relevance scores for all files
+        relevance_scores = self.relevance_engine.calculate_relevance_scores(
+            task_description, repository_metadata
+        )
+
+        # Get symbol information for all files (cached for performance)
+        file_symbols_map = {}
+        for file_path in relevance_scores.keys():
+            if self._is_within_workspace(file_path):
+                try:
+                    symbols = self.symbol_analyzer.analyze_file_symbols(file_path)
+                    file_symbols_map[file_path] = symbols
+                except Exception:
+                    # If symbol analysis fails, continue with empty symbols
+                    file_symbols_map[file_path] = []
+
+        # Score each file based on combined relevance and symbol matches
+        file_scores = []
+        for file_path, relevance_score in relevance_scores.items():
+            if not self._is_within_workspace(file_path):
+                continue
+
+            # Get symbols for this file
+            symbols = file_symbols_map.get(file_path, [])
+
+            # Calculate base relevance score
+            base_score = relevance_score.composite
+
+            # Calculate symbol relevance bonus
+            symbol_bonus = self._calculate_symbol_relevance_bonus(
+                symbols, task_description, criteria
+            ) if criteria.use_symbol_level_selection else 0.0
+
+            # Combined score (relevance + symbol bonus, capped at 1.0)
+            combined_score = min(1.0, base_score + symbol_bonus)
+
+            # Only include files above minimum relevance threshold
+            if combined_score >= criteria.min_relevance_score:
+                file_scores.append((file_path, combined_score, symbols, relevance_score))
+
+        # Sort by combined score (descending)
+        file_scores.sort(key=lambda x: x[1], reverse=True)
+
+        # Apply maximum files limit
+        max_files = criteria.max_files or 50
+        if max_files > 0:
+            file_scores = file_scores[:max_files]
+
+        # Get detailed context for selected files
+        for file_path, combined_score, symbols, relevance_score in file_scores:
+            file_context = self._get_file_context_enhanced(
+                file_path, combined_score, symbols, criteria
+            )
+            if file_context:
+                selected_context["files"].append(file_context)
+                # Add symbols to global symbols list
+                selected_context["symbols"].extend(
+                    self._format_symbols_for_output(symbols)
+                )
+
+        # Extract snippets from selected files
+        if criteria.extract_snippets:
+            for file_context in selected_context["files"]:
+                file_path = Path(file_context["path"])
+                try:
+                    content = file_path.read_text(encoding='utf-8')
+                    snippets = self._extract_snippets_from_content(
+                        content,
+                        type('RelevanceScore', (), {'composite': file_context.get('relevance_score', 0.5)})(),
+                        criteria
+                    )
+                    file_context["snippets"] = snippets
+                    selected_context["snippets"].extend(snippets)
+                except Exception:
+                    # If we can't read the file for snippets, skip snippets for this file
+                    pass
+
+        return selected_context
+
+    def _select_context_relevance_only(
+        self,
+        task_description: str,
+        repository_metadata: Any,
+        criteria: SelectionCriteria
+    ) -> Dict[str, Any]:
+        """
+        Select context using only relevance engine (fallback when symbol analyzer unavailable).
+
+        Args:
+            task_description: Description of the current task
+            repository_metadata: Repository metadata from Phase 3
+            criteria: Selection criteria to use
+
+        Returns:
+            Dictionary containing selected context
+        """
+        selected_context = {
+            "files": [],
+            "symbols": [],
+            "snippets": [],
+            "repository_info": {},
+        }
+
+        # Get relevance scores for all files
+        relevance_scores = self.relevance_engine.calculate_relevance_scores(
+            task_description, repository_metadata
+        )
+
+        # Score and select files based on relevance alone
+        file_scores = []
+        for file_path, relevance_score in relevance_scores.items():
+            if not self._is_within_workspace(file_path):
+                continue
+
+            base_score = relevance_score.composite
+
+            # Only include files above minimum relevance threshold
+            if base_score >= criteria.min_relevance_score:
+                file_scores.append((file_path, base_score, relevance_score))
+
+        # Sort by relevance score (descending)
+        file_scores.sort(key=lambda x: x[1], reverse=True)
+
+        # Apply maximum files limit
+        max_files = criteria.max_files or 50
+        if max_files > 0:
+            file_scores = file_scores[:max_files]
+
+        # Get detailed context for selected files
+        for file_path, relevance_score, _ in file_scores:
+            file_context = self._get_file_context_basic(
+                file_path, relevance_score, criteria
+            )
+            if file_context:
+                selected_context["files"].append(file_context)
+
+        # Extract snippets from selected files
+        if criteria.extract_snippets:
+            for file_context in selected_context["files"]:
+                file_path = Path(file_context["path"])
+                try:
+                    content = file_path.read_text(encoding='utf-8')
+                    snippets = self._extract_snippets_from_content(
+                        content,
+                        type('RelevanceScore', (), {'composite': file_context.get('relevance_score', 0.5)})(),
+                        criteria
+                    )
+                    file_context["snippets"] = snippets
+                    selected_context["snippets"].extend(snippets)
+                except Exception:
+                    # If we can't read the file for snippets, skip snippets for this file
+                    pass
+
+        return selected_context
+
+    def _select_context_symbols_only(
+        self,
+        task_description: str,
+        repository_metadata: Any,
+        criteria: SelectionCriteria
+    ) -> Dict[str, Any]:
+        """
+        Select context using only symbol analyzer (fallback when relevance engine unavailable).
+
+        Args:
+            task_description: Description of the current task
+            repository_metadata: Repository metadata from Phase 3
+            criteria: Selection criteria to use
+
+        Returns:
+            Dictionary containing selected context
+        """
+        selected_context = {
+            "files": [],
+            "symbols": [],
+            "snippets": [],
+            "repository_info": {},
+        }
+
+        # Get symbol information for all files
+        file_symbols_map = {}
+        structure_map = getattr(repository_metadata, 'structure_map', {})
+        for dir_path, file_names in structure_map.items():
+            for file_name in file_names:
+                # Construct file path (simplified)
+                if dir_path == "":
+                    file_path = Path(file_name)
+                else:
+                    file_path = Path(dir_path) / file_name
+
+                if self._is_within_workspace(file_path):
+                    try:
+                        symbols = self.symbol_analyzer.analyze_file_symbols(file_path)
+                        file_symbols_map[file_path] = symbols
+                    except Exception:
+                        # If symbol analysis fails, continue with empty symbols
+                        file_symbols_map[file_path] = []
+
+        # Score each file based on symbol matches
+        file_scores = []
+        for file_path, symbols in file_symbols_map.items():
+            # Calculate symbol relevance score
+            symbol_score = self._calculate_symbol_relevance_bonus(
+                symbols, task_description, criteria
+            )
+
+            # Only include files with sufficient symbol relevance
+            if symbol_score >= criteria.min_relevance_score:
+                file_scores.append((file_path, symbol_score, symbols))
+
+        # Sort by symbol score (descending)
+        file_scores.sort(key=lambda x: x[1], reverse=True)
+
+        # Apply maximum files limit
+        max_files = criteria.max_files or 50
+        if max_files > 0:
+            file_scores = file_scores[:max_files]
+
+        # Get detailed context for selected files
+        for file_path, symbol_score, symbols in file_scores:
+            file_context = self._get_file_context_enhanced(
+                file_path, symbol_score, symbols, criteria
+            )
+            if file_context:
+                selected_context["files"].append(file_context)
+                # Add symbols to global symbols list
+                selected_context["symbols"].extend(
+                    self._format_symbols_for_output(symbols)
+                )
+
+        # Extract snippets from selected files
+        if criteria.extract_snippets:
+            for file_context in selected_context["files"]:
+                file_path = Path(file_context["path"])
+                try:
+                    content = file_path.read_text(encoding='utf-8')
+                    snippets = self._extract_snippets_from_content(
+                        content,
+                        type('RelevanceScore', (), {'composite': file_context.get('relevance_score', 0.5)})(),
+                        criteria
+                    )
+                    file_context["snippets"] = snippets
+                    selected_context["snippets"].extend(snippets)
+                except Exception:
+                    # If we can't read the file for snippets, skip snippets for this file
+                    pass
+
+        return selected_context
 
     def _extract_file_snippets(
         self,
