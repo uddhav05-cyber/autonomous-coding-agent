@@ -58,7 +58,7 @@ The orchestrator maintains:
 - **Iteration Counter**: Current iteration number, max iterations allowed
 - **Execution History**: Sequence of LLM responses, tool calls, results
 - **Context Summary**: Compressed representation of workspace state and knowledge
-- **Resource Usage**: Tokens consumed, time elapsed, tool call counts
+- **Resource Usage**: Tokens consumed, time elapsed, tool call counts, model call counts, retry counts
 - **Error State**: Classification and details of any errors encountered
 - **Completion Signals**: Flags indicating task completion, blocking conditions, or failures
 
@@ -252,6 +252,8 @@ MODEL_ERROR: LLM-specific issues (malformed response, provider error, content fi
 ## 31. Resource Limits
 - **Token Limits**: Per-iteration and cumulative token usage tracking
 - **Tool Call Limits**: Maximum number of tool invocations per iteration/task
+- **Model Call Limits**: Maximum number of LLM invocations per task (tracked via total_model_calls)
+- **Retry Limits**: Maximum number of retry attempts per task (tracked via total_retries_used)
 - **Time Limits**: Iteration-level and overall task duration caps
 - **Memory Limits**: Working memory usage monitoring and control
 - **Network Bandwidth**: Constraints on external API call frequency and volume

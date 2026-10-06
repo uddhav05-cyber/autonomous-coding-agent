@@ -36,6 +36,7 @@ from autonomous_agent.tool.errors import (
     ResourceLimitError,
     InternalToolError
 )
+from autonomous_agent.config.settings import Settings
 import json
 import os
 import hashlib
@@ -510,6 +511,8 @@ class AgentOrchestratorState:
     last_activity_time: float = field(default_factory=time.time)
     total_tokens_used: int = 0
     total_tool_calls: int = 0
+    total_model_calls: int = 0
+    total_retries_used: int = 0
 
     # Context and execution history
     execution_history: List[Dict[str, Any]] = field(default_factory=list)
@@ -579,6 +582,7 @@ class AgentOrchestrator:
         max_iterations: int = 10,
         iteration_timeout: float = 120.0,
         enable_metrics: bool = True,
+        settings: Optional[Settings] = None,
         # Enhanced control parameters
         max_consecutive_failures: int = 3,
         retry_base_delay: float = 1.0,
@@ -597,6 +601,7 @@ class AgentOrchestrator:
             max_iterations: Maximum iterations before forced termination
             iteration_timeout: Timeout per iteration in seconds
             enable_metrics: Whether to collect execution metrics
+            settings: Configuration settings for the orchestrator
             max_consecutive_failures: Maximum consecutive failures before termination
             retry_base_delay: Base delay for exponential backoff (seconds)
             max_retry_delay: Maximum delay for exponential backoff (seconds)
@@ -604,6 +609,7 @@ class AgentOrchestrator:
             stall_detection_iterations: Number of iterations with no progress to consider stalled
         """
         print("!!! AgentOrchestrator.__init__ called !!!")
+        print(f"DEBUG: Creating orchestrator with max_iterations={max_iterations}")
         self.model_adapter = model_adapter
         self.context_manager = context_manager
         self.tool_registry = tool_registry
@@ -612,6 +618,7 @@ class AgentOrchestrator:
         self.max_iterations = max_iterations
         self.iteration_timeout = iteration_timeout
         self.enable_metrics = enable_metrics
+        self.settings = settings if settings is not None else Settings()
 
         # Enhanced control parameters
         self.max_consecutive_failures = max_consecutive_failures
@@ -680,6 +687,8 @@ class AgentOrchestrator:
             "last_activity_time": self._state.last_activity_time,
             "total_tokens_used": self._state.total_tokens_used,
             "total_tool_calls": self._state.total_tool_calls,
+            "total_model_calls": self._state.total_model_calls,
+            "total_retries_used": self._state.total_retries_used,
             "execution_history": self._state.execution_history,
             "tool_call_history": self._state.tool_call_history,
             "tool_result_history": self._state.tool_result_history,
@@ -741,7 +750,6 @@ class AgentOrchestrator:
         Returns:
             True if recovery was successful, False otherwise
         """
-        print(f"DEBUG: _recover_state called with checkpoint_name={checkpoint_name}")
         file_path = self._get_persistence_file_path(checkpoint_name)
         print(f"DEBUG: Looking for persistence file at {file_path}")
         if not os.path.exists(file_path):
@@ -754,6 +762,7 @@ class AgentOrchestrator:
             with open(file_path, "r") as f:
                 state_dict = json.load(f)
             print(f"DEBUG: Loaded state dict: {state_dict}")
+            print(f"DEBUG: State dict keys: {list(state_dict.keys())}")
 
             # Validate the recovered state
             if not self._validate_recovered_state(state_dict):
@@ -781,6 +790,8 @@ class AgentOrchestrator:
                 last_activity_time=state_dict["last_activity_time"],
                 total_tokens_used=state_dict["total_tokens_used"],
                 total_tool_calls=state_dict["total_tool_calls"],
+                total_model_calls=state_dict.get("total_model_calls", 0),
+                total_retries_used=state_dict.get("total_retries_used", 0),
                 execution_history=state_dict["execution_history"],
                 tool_call_history=state_dict["tool_call_history"],
                 tool_result_history=state_dict["tool_result_history"],
@@ -856,6 +867,7 @@ class AgentOrchestrator:
 
         for field in required_fields:
             if field not in state_dict:
+                print(f"DEBUG: Missing required field: {field}")
                 return False
 
         # Additional validation
@@ -918,6 +930,12 @@ class AgentOrchestrator:
         for warning in state_dict["resource_warnings"]:
             if not isinstance(warning, str):
                 return False
+
+        # Validate new fields for Phase 7.3.5.1
+        if not isinstance(state_dict.get("total_model_calls", 0), int) or state_dict.get("total_model_calls", 0) < 0:
+            return False
+        if not isinstance(state_dict.get("total_retries_used", 0), int) or state_dict.get("total_retries_used", 0) < 0:
+            return False
 
         # Validate new fields for Phase 7.3.3
         if "failure_history" in state_dict:
@@ -1104,6 +1122,13 @@ class AgentOrchestrator:
             # Main execution loop
             print(f"DEBUG: Entering main loop - _state.is_complete={self._state.is_complete if self._state else None}, _state.current_iteration={self._state.current_iteration if self._state else None}, _state.max_iterations={self._state.max_iterations if self._state else None}")
             while not self._state.is_complete and self._state.current_iteration < self._state.max_iterations:
+                # Check for resource exhaustion before starting iteration
+                if self._is_resource_exhausted():
+                    self._state.state = AgentState.FAILED
+                    self._state.is_complete = True
+                    self._state.completion_reason = "Resource exhaustion: maximum limits reached"
+                    break
+
                 # Check for pause before starting iteration
                 if self._paused and self._state.state == AgentState.RUNNING:
                     print(f"DEBUG: Pausing at iteration {self._state.current_iteration}")
@@ -1232,6 +1257,11 @@ class AgentOrchestrator:
 
                 # Get response from model adapter with timeout
                 try:
+                    # Track model call
+                    self._state.total_model_calls += 1
+                    # Track retry (attempt 0 is first try, attempts 1+ are retries)
+                    if attempt > 0:
+                        self._state.total_retries_used += 1
                     model_response = await asyncio.wait_for(
                         self.model_adapter._generate(model_request),
                         timeout=30.0  # LLM response timeout
@@ -1615,6 +1645,28 @@ Please provide the next steps to accomplish the task. If the task is complete, i
 """
         return prompt
 
+    def _is_resource_exhausted(self) -> bool:
+        """Check if any resource limits have been exhausted.
+
+        Returns:
+            True if any resource limit has been exceeded, False otherwise
+        """
+        if self._state is None:
+            return False
+
+        # Check model calls limit
+        if self._state.total_model_calls >= self.settings.execution_limits.max_model_calls:
+            return True
+
+        # Check tool calls limit
+        if self._state.total_tool_calls >= self.settings.execution_limits.max_tool_calls:
+            return True
+
+        # Note: We don't check total_retries_used against a specific limit here
+        # as retries are typically bounded by other mechanisms (max_consecutive_failures)
+
+        return False
+
     def _record_failure(self, error: Exception, iteration: int) -> None:
         """Record a failure for pattern detection and analysis.
 
@@ -1866,8 +1918,9 @@ Please provide the next steps to accomplish the task. If the task is complete, i
                 results.append(result)
 
                 # Update counters
+                self._state.total_tool_calls += 1
                 if result.success:
-                    self._state.total_tool_calls += 1
+                    pass  # Success already counted
                 else:
                     self._state.error_count += 1
 
@@ -1880,6 +1933,7 @@ Please provide the next steps to accomplish the task. If the task is complete, i
                     )
                 ))
                 self._state.error_count += 1
+                self._state.total_tool_calls += 1
 
         return results
 
