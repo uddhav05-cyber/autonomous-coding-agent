@@ -718,7 +718,8 @@ class ContextSelector:
                     snippets = self._extract_snippets_from_content(
                         content,
                         type('RelevanceScore', (), {'composite': file_context.get('relevance_score', 0.5)})(),
-                        criteria
+                        criteria,
+                        task_description
                     )
                     file_context["snippets"] = snippets
                     selected_context["snippets"].extend(snippets)
@@ -812,7 +813,8 @@ class ContextSelector:
                     snippets = self._extract_snippets_from_content(
                         content,
                         type('RelevanceScore', (), {'composite': file_context.get('relevance_score', 0.5)})(),
-                        criteria
+                        criteria,
+                        task_description
                     )
                     file_context["snippets"] = snippets
                     selected_context["snippets"].extend(snippets)
@@ -826,7 +828,8 @@ class ContextSelector:
         self,
         file_path: Path,
         relevance_score: Any,
-        criteria: SelectionCriteria
+        criteria: SelectionCriteria,
+        task_description: str = ""
     ) -> List[Dict[str, Any]]:
         """
         Extract code snippets from a file.
@@ -835,6 +838,7 @@ class ContextSelector:
             file_path: Path to the file
             relevance_score: Relevance score for the file
             criteria: Selection criteria
+            task_description: Description of the current task for relevance-guided extraction
 
         Returns:
             List of snippet dictionaries
@@ -845,7 +849,7 @@ class ContextSelector:
 
             content = file_path.read_text(encoding='utf-8')
             return self._extract_snippets_from_content(
-                content, relevance_score, criteria
+                content, relevance_score, criteria, task_description
             )
         except Exception:
             return []
@@ -854,7 +858,8 @@ class ContextSelector:
         self,
         content: str,
         relevance_score: Any,
-        criteria: SelectionCriteria
+        criteria: SelectionCriteria,
+        task_description: str = ""
     ) -> List[Dict[str, Any]]:
         """
         Extract code snippets from file content.
@@ -863,6 +868,7 @@ class ContextSelector:
             content: File content as string
             relevance_score: Relevance score for the file
             criteria: Selection criteria
+            task_description: Description of the current task for relevance-guided extraction
 
         Returns:
             List of snippet dictionaries
@@ -879,36 +885,174 @@ class ContextSelector:
         max_snippets = criteria.max_snippets_per_file or 5
         lines_per_snippet = criteria.lines_per_snippet or 10
 
-        # Simple sampling approach
-        if total_lines <= lines_per_snippet * max_snippets:
-            # Small file, show everything in chunks
-            chunk_size = lines_per_snippet
-            for i in range(0, total_lines, chunk_size):
-                chunk_lines = lines[i:i + chunk_size]
-                if chunk_lines:
-                    snippets.append({
-                        "start_line": i,
-                        "end_line": min(i + len(chunk_lines) - 1, total_lines - 1),
-                        "content": "\n".join(chunk_lines),
-                        "relevance": getattr(relevance_score, 'composite', 0.5)
-                        if relevance_score else 0.5
-                    })
+        # Extract keywords from task description for relevance-guided extraction
+        task_keywords = []
+        if task_description:
+            task_keywords = self._extract_keywords(task_description.lower())
+
+        # If we have keywords, use relevance-guided extraction
+        if task_keywords:
+            # Score each line based on keyword matches
+            line_scores = [0.0] * total_lines
+            for i, line in enumerate(lines):
+                line_lower = line.lower()
+                # Count keyword matches in this line
+                matches = sum(1 for keyword in task_keywords if keyword in line_lower)
+                # Normalize by line length to avoid bias toward longer lines
+                if len(line) > 0:
+                    line_scores[i] = matches / len(line)
+                else:
+                    line_scores[i] = float(matches)  # For empty lines, just count matches
+
+            # If we found any keyword matches, use relevance-guided extraction
+            if any(score > 0 for score in line_scores):
+                if total_lines <= lines_per_snippet * max_snippets:
+                    # Small file: evaluate all possible chunks and pick the best ones
+                    chunk_size = lines_per_snippet
+                    chunk_scores = []
+                    for i in range(0, total_lines, chunk_size):
+                        chunk_lines = lines[i:i + chunk_size]
+                        if chunk_lines:
+                            # Average score of lines in this chunk
+                            chunk_score = sum(line_scores[i:i + len(chunk_lines)]) / len(chunk_lines)
+                            chunk_scores.append((i, chunk_score, chunk_lines))
+
+                    # Sort chunks by score (descending) and take the top ones
+                    chunk_scores.sort(key=lambda x: x[1], reverse=True)
+                    selected_chunks = chunk_scores[:max_snippets]
+
+                    # Convert selected chunks to snippets
+                    for start_idx, score, chunk_lines in selected_chunks:
+                        snippets.append({
+                            "start_line": start_idx,
+                            "end_line": min(start_idx + len(chunk_lines) - 1, total_lines - 1),
+                            "content": "\n".join(chunk_lines),
+                            "relevance": score  # Use the chunk's relevance score
+                        })
+                else:
+                    # Large file: use relevance-guided sampling
+                    # Create a probability distribution based on line scores
+                    total_score = sum(line_scores)
+                    if total_score > 0:
+                        # Normalize to get probabilities
+                        line_probabilities = [score / total_score for score in line_scores]
+                    else:
+                        # Fallback to uniform distribution if no keyword matches found
+                        line_probabilities = [1.0 / total_lines] * total_lines
+
+                    # Determine how many samples to take
+                    # We want to ensure we get good coverage while focusing on high-relevance areas
+                    num_samples = min(max_snippets * 3, total_lines // lines_per_snippet + 1)
+                    if num_samples < max_snippets:
+                        num_samples = max_snippets
+
+                    # Select lines based on probability distribution (without replacement)
+                    selected_indices = set()
+                    attempts = 0
+                    max_attempts = num_samples * 3  # Prevent infinite loop
+
+                    while len(selected_indices) < num_samples and attempts < max_attempts:
+                        # Weighted random selection would be ideal, but for determinism,
+                        # we'll select the highest scoring lines that haven't been chosen yet
+                        # Create list of (index, score) pairs for unselected indices
+                        unselected_scores = [(i, line_scores[i]) for i in range(total_lines) if i not in selected_indices]
+                        if not unselected_scores:
+                            break
+
+                        # Sort by score descending and pick the best one
+                        unselected_scores.sort(key=lambda x: x[1], reverse=True)
+                        best_idx = unselected_scores[0][0]
+                        selected_indices.add(best_idx)
+                        attempts += 1
+
+                    # If we didn't get enough samples, fill with uniform sampling
+                    if len(selected_indices) < max_snippets:
+                        # Add uniformly spaced indices that aren't already selected
+                        interval = max(1, total_lines // max_snippets)
+                        for i in range(0, total_lines, interval):
+                            if len(selected_indices) >= max_snippets:
+                                break
+                            if i not in selected_indices:
+                                selected_indices.add(i)
+
+                    # Convert selected indices to snippets
+                    sorted_indices = sorted(list(selected_indices))
+                    for start_idx in sorted_indices:
+                        if len(snippets) >= max_snippets:
+                            break
+                        end_line = min(start_idx + lines_per_snippet, total_lines)
+                        chunk_lines = lines[start_idx:end_line]
+                        if chunk_lines:
+                            # Calculate average relevance for this snippet
+                            snippet_score = sum(line_scores[start_idx:end_line]) / len(chunk_lines)
+                            snippets.append({
+                                "start_line": start_idx,
+                                "end_line": end_line - 1,
+                                "content": "\n".join(chunk_lines),
+                                "relevance": snippet_score
+                            })
+            else:
+                # No keyword matches found in any line - fall back to original behavior
+                if total_lines <= lines_per_snippet * max_snippets:
+                    # Small file, show everything in chunks
+                    chunk_size = lines_per_snippet
+                    for i in range(0, total_lines, chunk_size):
+                        chunk_lines = lines[i:i + chunk_size]
+                        if chunk_lines:
+                            snippets.append({
+                                "start_line": i,
+                                "end_line": min(i + len(chunk_lines) - 1, total_lines - 1),
+                                "content": "\n".join(chunk_lines),
+                                "relevance": getattr(relevance_score, 'composite', 0.5)
+                                if relevance_score else 0.5
+                            })
+                else:
+                    # Larger file, sample at regular intervals
+                    interval = max(1, total_lines // (max_snippets * lines_per_snippet))
+                    for i in range(0, total_lines, interval):
+                        if len(snippets) >= max_snippets:
+                            break
+                        end_line = min(i + lines_per_snippet, total_lines)
+                        chunk_lines = lines[i:end_line]
+                        if chunk_lines:
+                            snippets.append({
+                                "start_line": i,
+                                "end_line": end_line - 1,
+                                "content": "\n".join(chunk_lines),
+                                "relevance": getattr(relevance_score, 'composite', 0.5)
+                                if relevance_score else 0.5
+                            })
         else:
-            # Larger file, sample at regular intervals
-            interval = max(1, total_lines // (max_snippets * lines_per_snippet))
-            for i in range(0, total_lines, interval):
-                if len(snippets) >= max_snippets:
-                    break
-                end_line = min(i + lines_per_snippet, total_lines)
-                chunk_lines = lines[i:end_line]
-                if chunk_lines:
-                    snippets.append({
-                        "start_line": i,
-                        "end_line": end_line - 1,
-                        "content": "\n".join(chunk_lines),
-                        "relevance": getattr(relevance_score, 'composite', 0.5)
-                        if relevance_score else 0.5
-                    })
+            # No task description or no keywords extracted - use original behavior
+            if total_lines <= lines_per_snippet * max_snippets:
+                # Small file, show everything in chunks
+                chunk_size = lines_per_snippet
+                for i in range(0, total_lines, chunk_size):
+                    chunk_lines = lines[i:i + chunk_size]
+                    if chunk_lines:
+                        snippets.append({
+                            "start_line": i,
+                            "end_line": min(i + len(chunk_lines) - 1, total_lines - 1),
+                            "content": "\n".join(chunk_lines),
+                            "relevance": getattr(relevance_score, 'composite', 0.5)
+                            if relevance_score else 0.5
+                        })
+            else:
+                # Larger file, sample at regular intervals
+                interval = max(1, total_lines // (max_snippets * lines_per_snippet))
+                for i in range(0, total_lines, interval):
+                    if len(snippets) >= max_snippets:
+                        break
+                    end_line = min(i + lines_per_snippet, total_lines)
+                    chunk_lines = lines[i:end_line]
+                    if chunk_lines:
+                        snippets.append({
+                            "start_line": i,
+                            "end_line": end_line - 1,
+                            "content": "\n".join(chunk_lines),
+                            "relevance": getattr(relevance_score, 'composite', 0.5)
+                            if relevance_score else 0.5
+                        })
 
         return snippets[:max_snippets]
 

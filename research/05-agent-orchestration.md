@@ -920,7 +920,7 @@ Implemented minimal goal tracking to represent task goal and completion state, i
   - pending → in_progress when progress > 0
   - in_progress → completed when progress >= 1.0 AND all completion criteria are satisfied
   - in_progress → failed when error count reaches max_consecutive_failures
-- For goals with no completion criteria, progress remains 0.0 and status stays pending
+  - For goals with no completion criteria, progress remains 0.0 and status stays pending
 
 **Integration with AgentOrchestratorState**
 - Added goal_tracker: GoalTracker field (with default factory)
@@ -1169,3 +1169,73 @@ criteria = SelectionCriteria(
 - Redesign of ContextManager architecture
 - Creation of duplicate SymbolAnalyzer
 - Changes to existing ContextSelector methods beyond those specified
+
+### Phase 7.3.5.2.2: Relevance-Guided Extraction (Stage 1 - Basic Line Relevance IMPLEMENTED)
+
+Enhanced the Context Selector to use relevance information from task descriptions to preferentially select relevant code regions within selected files, providing more precise context extraction while maintaining all existing functionality as fallback.
+
+#### Implementation Details
+
+**Enhanced ContextSelector Class**
+- Modified `_extract_snippets_from_content` method to accept `task_description` parameter
+- Updated `_extract_file_snippets` method to accept `task_description` parameter (for API consistency)
+- Enhanced `select_context` method callers to pass `task_description` to snippet extraction:
+  - `_select_context_with_symbols`
+  - `_select_context_relevance_only` 
+  - `_select_context_symbols_only`
+
+**Relevance-Guided Extraction Algorithm**
+When task description contains usable keywords:
+1. Extract keywords from task description using existing `_extract_keywords` method
+2. Score each line based on keyword matches (normalized by line length to avoid bias)
+3. For small files (lines ≤ lines_per_snippet × max_snippets_per_file):
+   - Evaluate all possible chunks and select top-scoring ones by average line relevance
+4. For large files (lines > lines_per_snippet × max_snippets_per_file):
+   - Create probability distribution based on line scores
+   - Select highest scoring lines first (deterministic)
+   - Fill remaining slots with uniform sampling if needed
+   - Respect lines_per_snippet and max_snippets_per_file constraints
+
+**Fallback Mechanisms** (Preserve Existing Behavior)
+- When task_description is empty → Original extraction behavior
+- When no keywords extracted from task_description → Original extraction behavior  
+- When keywords exist but no matches found in content → Original extraction behavior
+- When relevance-guided sampling insufficient → Supplement with uniform sampling
+- All existing criteria parameters (lines_per_snippet, max_snippets_per_file) respected
+
+**Backward Compatibility**
+- All existing interfaces preserved
+- Existing functionality unchanged when task_description not usable
+- No changes to ContextManager, ContextBudgeter, ContextAssembler, or DuplicatePreventer
+- No modifications to token budgeting systems
+- No duplicate analyzer creation - uses existing relevance information from task description
+
+#### Configuration
+Relevance-guided extraction is automatically triggered when:
+- `criteria.extract_snippets == True` (default)
+- `task_description` parameter is provided and contains usable keywords
+
+#### Testing
+- Unit tests: 7/7 passed in test_context_selector.py
+- All existing unit tests continue to pass (270 passed, 0 failed, 4 skipped)
+- All existing integration tests continue to pass (14 passed, 0 failed, 0 skipped)
+- Total test suite: 284 passed, 0 failed, 4 skipped (matches baseline)
+- Verified relevance-guided extraction selects more relevant regions when keywords match
+- Verified fallback mechanisms work correctly when relevance information unavailable
+
+#### Key Benefits
+- More precise context selection at line level rather than uniform sampling
+- Better alignment between task requirements and extracted code regions
+- Improved token efficiency by focusing on relevant code within selected files
+- Maintains all existing extraction capabilities as fallback
+- Leverages existing keyword extraction infrastructure
+
+#### Configuration
+Relevance-guided extraction happens automatically when task_description is provided to the ContextSelector.select_context() method.
+
+#### Non-Goals (Explicitly Out of Scope for Stage 1)
+- Implementation of symbol-aware extraction (Phase 7.3.5.2.2 Stage 2)
+- Implementation of context-window optimization/snippet merging (Phase 7.3.5.2.2 Stage 3)
+- Changes to Context Budgeting or Context Assembly systems
+- Creation of semantic duplicate detectors or vector search capabilities
+- Machine learning ranking or embeddings-based relevance scoring
