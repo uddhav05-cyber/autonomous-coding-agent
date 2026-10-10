@@ -16,6 +16,7 @@ from autonomous_agent.tool.registry import ToolRegistry
 from autonomous_agent.tool.executor import ToolExecutor
 from autonomous_agent.workspace import Workspace
 from autonomous_agent.tool.errors import ToolError
+from autonomous_agent.config.settings import Settings
 
 
 @pytest.fixture
@@ -65,13 +66,20 @@ def orchestrator(mock_model_adapter, mock_context_manager, mock_tool_registry, m
     temp_dir = tempfile.mkdtemp()
     mock_workspace.workspace_root = temp_dir
     print(f"Fixture mock_workspace.workspace_root: {mock_workspace.workspace_root}")
+    # Create test settings
+    settings = Settings(
+        environment="testing",
+        log_level="DEBUG",
+        workspace_path="./test_workspace"
+    )
     return AgentOrchestrator(
         model_adapter=mock_model_adapter,
         context_manager=mock_context_manager,
         tool_registry=mock_tool_registry,
         tool_executor=mock_tool_executor,
         workspace=mock_workspace,
-        max_iterations=2
+        max_iterations=2,
+        settings=settings
     )
 
 

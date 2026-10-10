@@ -4,9 +4,8 @@ This module provides the AgentOrchestrator class that coordinates the
 autonomous coding-agent execution loop, managing the iterative process of
 LLM reasoning, tool execution, and state updates.
 """
-from __future__ import annotations
 
-print("!!! MODULE LEVEL PRINT !!!")
+from __future__ import annotations
 
 import asyncio
 import json
@@ -37,6 +36,7 @@ from autonomous_agent.tool.errors import (
     ResourceLimitError,
     InternalToolError
 )
+from autonomous_agent.config.settings import Settings
 import json
 import os
 import hashlib
@@ -489,6 +489,7 @@ class AgentState(Enum):
     """Possible states of the agent orchestrator."""
     PENDING = auto()      # Initial state, task not started
     RUNNING = auto()      # Agent is actively processing
+    PAUSED = auto()       # Agent is paused, waiting for resume
     WAITING_FOR_TOOLS = auto()  # Waiting for tool execution results
     COMPLETED = auto()    # Task completed successfully
     FAILED = auto()       # Task failed due to error
@@ -510,6 +511,8 @@ class AgentOrchestratorState:
     last_activity_time: float = field(default_factory=time.time)
     total_tokens_used: int = 0
     total_tool_calls: int = 0
+    total_model_calls: int = 0
+    total_retries_used: int = 0
 
     # Context and execution history
     execution_history: List[Dict[str, Any]] = field(default_factory=list)
@@ -579,6 +582,7 @@ class AgentOrchestrator:
         max_iterations: int = 10,
         iteration_timeout: float = 120.0,
         enable_metrics: bool = True,
+        settings: Optional[Settings] = None,
         # Enhanced control parameters
         max_consecutive_failures: int = 3,
         retry_base_delay: float = 1.0,
@@ -597,6 +601,7 @@ class AgentOrchestrator:
             max_iterations: Maximum iterations before forced termination
             iteration_timeout: Timeout per iteration in seconds
             enable_metrics: Whether to collect execution metrics
+            settings: Configuration settings for the orchestrator
             max_consecutive_failures: Maximum consecutive failures before termination
             retry_base_delay: Base delay for exponential backoff (seconds)
             max_retry_delay: Maximum delay for exponential backoff (seconds)
@@ -604,6 +609,7 @@ class AgentOrchestrator:
             stall_detection_iterations: Number of iterations with no progress to consider stalled
         """
         print("!!! AgentOrchestrator.__init__ called !!!")
+        print(f"DEBUG: Creating orchestrator with max_iterations={max_iterations}")
         self.model_adapter = model_adapter
         self.context_manager = context_manager
         self.tool_registry = tool_registry
@@ -612,6 +618,7 @@ class AgentOrchestrator:
         self.max_iterations = max_iterations
         self.iteration_timeout = iteration_timeout
         self.enable_metrics = enable_metrics
+        self.settings = settings if settings is not None else Settings()
 
         # Enhanced control parameters
         self.max_consecutive_failures = max_consecutive_failures
@@ -623,14 +630,27 @@ class AgentOrchestrator:
         # Internal state
         self._state: Optional[AgentOrchestratorState] = None
         self._cancelled: bool = False
+        self._paused: bool = False
+        self._stop_after_iteration: bool = False
         # Persistence and recovery
         self.persistence_dir = os.path.join(str(self.workspace.workspace_root), ".orchestrator_state")
         os.makedirs(self.persistence_dir, exist_ok=True)
-        # TODO: Add cancellation token or event for graceful shutdown (we have a basic cancelled flag)
 
     def cancel(self) -> None:
         """Cancel the agent execution gracefully."""
         self._cancelled = True
+
+    def pause(self) -> None:
+        """Pause the agent execution at the next safe interruption boundary."""
+        self._paused = True
+
+    def resume(self) -> None:
+        """Resume a paused agent execution."""
+        self._paused = False
+
+    def stop_after_iteration(self) -> None:
+        """Signal to stop after the current iteration completes."""
+        self._stop_after_iteration = True
     def _get_persistence_file_path(self, checkpoint_name: str = "latest") -> str:
         """Get the file path for a persistence checkpoint.
 
@@ -667,6 +687,8 @@ class AgentOrchestrator:
             "last_activity_time": self._state.last_activity_time,
             "total_tokens_used": self._state.total_tokens_used,
             "total_tool_calls": self._state.total_tool_calls,
+            "total_model_calls": self._state.total_model_calls,
+            "total_retries_used": self._state.total_retries_used,
             "execution_history": self._state.execution_history,
             "tool_call_history": self._state.tool_call_history,
             "tool_result_history": self._state.tool_result_history,
@@ -695,6 +717,10 @@ class AgentOrchestrator:
             # Goal tracking (Phase 7.3.4.2)
             "goal_tracker_history": self._state.goal_tracker.get_bounded_history(),
             "goal_tracker_max_size": self._state.goal_tracker._max_history_size,
+            # User interruption and control (Phase 7.3.4.3)
+            "cancelled": self._cancelled,
+            "paused": self._paused,
+            "stop_after_iteration": self._stop_after_iteration,
             # Previous iteration counters for calculating per-iteration deltas
             "prev_total_tool_calls": self._state.prev_total_tool_calls,
             "prev_error_count": self._state.prev_error_count,
@@ -724,7 +750,6 @@ class AgentOrchestrator:
         Returns:
             True if recovery was successful, False otherwise
         """
-        print(f"DEBUG: _recover_state called with checkpoint_name={checkpoint_name}")
         file_path = self._get_persistence_file_path(checkpoint_name)
         print(f"DEBUG: Looking for persistence file at {file_path}")
         if not os.path.exists(file_path):
@@ -737,6 +762,7 @@ class AgentOrchestrator:
             with open(file_path, "r") as f:
                 state_dict = json.load(f)
             print(f"DEBUG: Loaded state dict: {state_dict}")
+            print(f"DEBUG: State dict keys: {list(state_dict.keys())}")
 
             # Validate the recovered state
             if not self._validate_recovered_state(state_dict):
@@ -764,6 +790,8 @@ class AgentOrchestrator:
                 last_activity_time=state_dict["last_activity_time"],
                 total_tokens_used=state_dict["total_tokens_used"],
                 total_tool_calls=state_dict["total_tool_calls"],
+                total_model_calls=state_dict.get("total_model_calls", 0),
+                total_retries_used=state_dict.get("total_retries_used", 0),
                 execution_history=state_dict["execution_history"],
                 tool_call_history=state_dict["tool_call_history"],
                 tool_result_history=state_dict["tool_result_history"],
@@ -804,6 +832,10 @@ class AgentOrchestrator:
 
             print(f"DEBUG: Setting _state to recovered state")
             self._state = recovered_state
+            # Restore user interruption and control fields (Phase 7.3.4.3)
+            self._cancelled = state_dict.get("cancelled", False)
+            self._paused = state_dict.get("paused", False)
+            self._stop_after_iteration = state_dict.get("stop_after_iteration", False)
             print(f"DEBUG: Recovery successful")
             return True
         except Exception as e:
@@ -835,6 +867,7 @@ class AgentOrchestrator:
 
         for field in required_fields:
             if field not in state_dict:
+                print(f"DEBUG: Missing required field: {field}")
                 return False
 
         # Additional validation
@@ -897,6 +930,12 @@ class AgentOrchestrator:
         for warning in state_dict["resource_warnings"]:
             if not isinstance(warning, str):
                 return False
+
+        # Validate new fields for Phase 7.3.5.1
+        if not isinstance(state_dict.get("total_model_calls", 0), int) or state_dict.get("total_model_calls", 0) < 0:
+            return False
+        if not isinstance(state_dict.get("total_retries_used", 0), int) or state_dict.get("total_retries_used", 0) < 0:
+            return False
 
         # Validate new fields for Phase 7.3.3
         if "failure_history" in state_dict:
@@ -1013,6 +1052,17 @@ class AgentOrchestrator:
             if not isinstance(state_dict["goal_tracker_max_size"], int) or state_dict["goal_tracker_max_size"] <= 0:
                 return False
 
+        # Validate user interruption and control fields (Phase 7.3.4.3)
+        if "cancelled" in state_dict:
+            if not isinstance(state_dict["cancelled"], bool):
+                return False
+        if "paused" in state_dict:
+            if not isinstance(state_dict["paused"], bool):
+                return False
+        if "stop_after_iteration" in state_dict:
+            if not isinstance(state_dict["stop_after_iteration"], bool):
+                return False
+
         return True
 
     async def execute_task(self, task_description: str) -> AgentOrchestratorState:
@@ -1025,14 +1075,22 @@ class AgentOrchestrator:
             Final agent state after task completion or termination
         """
         print(f"DEBUG: execute_task called with task_description={task_description}")
+        print(f"DEBUG: Initial _cancelled={self._cancelled}")
+        print(f"DEBUG: About to call _recover_state")
+        print(f"DEBUG: execute_task called with task_description={task_description}")
+        print(f"DEBUG: Initial _cancelled={self._cancelled}")
         # Attempt to recover state from latest checkpoint
         recovered = self._recover_state("latest")
         if recovered and self._state is not None and not self._state.is_complete and self._state.task_description == task_description:
             # Recovery successful and we have a valid, incomplete state for the same task
             # Update the last activity time to now to prevent immediate timeout
             self._state.last_activity_time = time.time()
-            # Ensure the state is RUNNING
-            if self._state.state != AgentState.RUNNING:
+            # Handle recovered state - if we were paused, remain paused; if running, continue running
+            if self._state.state == AgentState.PAUSED:
+                # Remain paused, the control loop will handle it
+                self._paused = True
+            elif self._state.state != AgentState.RUNNING:
+                # If not paused or running, set to running (for safety)
                 self._state.state = AgentState.RUNNING
         else:
             # Initialize state
@@ -1057,10 +1115,43 @@ class AgentOrchestrator:
             self._state.state = AgentState.RUNNING
             self._state.start_time = time.time()
             self._state.last_activity_time = self._state.start_time
+            # Control fields (_cancelled, _paused, _stop_after_iteration) are preserved
+            # to allow user interruption actions before execute_task() to take effect
 
         try:
             # Main execution loop
+            print(f"DEBUG: Entering main loop - _state.is_complete={self._state.is_complete if self._state else None}, _state.current_iteration={self._state.current_iteration if self._state else None}, _state.max_iterations={self._state.max_iterations if self._state else None}")
             while not self._state.is_complete and self._state.current_iteration < self._state.max_iterations:
+                # Check for resource exhaustion before starting iteration
+                if self._is_resource_exhausted():
+                    self._state.state = AgentState.FAILED
+                    self._state.is_complete = True
+                    self._state.completion_reason = "Resource exhaustion: maximum limits reached"
+                    break
+
+                # Check for pause before starting iteration
+                if self._paused and self._state.state == AgentState.RUNNING:
+                    print(f"DEBUG: Pausing at iteration {self._state.current_iteration}")
+                    self._state.state = AgentState.PAUSED
+                    # Persist state when pausing
+                    self._persist_state()
+                    # Wait until resumed
+                    while self._paused and not self._cancelled and not self._state.is_complete:
+                        await asyncio.sleep(0.1)
+                    # If we were cancelled or completed while waiting, handle accordingly
+                    if self._cancelled:
+                        self._state.state = AgentState.CANCELLED
+                        self._state.is_complete = True
+                        self._state.completion_reason = "Task cancelled by user"
+                        break
+                    elif self._state.is_complete:
+                        break
+                    # Resume execution
+                    print(f"DEBUG: Resuming at iteration {self._state.current_iteration}")
+                    self._state.state = AgentState.RUNNING
+                elif self._paused:
+                    print(f"DEBUG: Paused but state is not RUNNING: {self._state.state if self._state else None}")
+
                 iteration_start = time.time()
 
                 # Check for overall timeout
@@ -1098,6 +1189,13 @@ class AgentOrchestrator:
                     self._state.completion_reason = "Task cancelled by user"
                     break
 
+                # Check for stop after iteration
+                if self._stop_after_iteration:
+                    self._state.state = AgentState.COMPLETED
+                    self._state.is_complete = True
+                    self._state.completion_reason = "Stop-after-iteration requested"
+                    break
+
                 # Small delay between iterations to prevent tight looping
                 await asyncio.sleep(0.1)
 
@@ -1116,26 +1214,24 @@ class AgentOrchestrator:
             # Ensure we have a final state
             print(f"DEBUG: Finally block - is_complete: {self._state.is_complete if self._state else None}, current_iteration: {self._state.current_iteration if self._state else None}, max_iterations: {self._state.max_iterations if self._state else None}")
             if not self._state.is_complete:
-                # Check if we reached max iterations
-                if self._state.current_iteration >= self._state.max_iterations:
-                    print(f"DEBUG: error_count = {self._state.error_count}")
-                    # If we have errors when reaching max iterations, treat as failure
-                    if self._state.error_count > 0:
-                        self._state.state = AgentState.FAILED
-                        self._state.is_complete = True
-                        self._state.completion_reason = "Max iterations reached without completion"
-                        print(f"DEBUG: Setting FAILED state due to max iterations reached with errors")
-                    else:
-                        self._state.state = AgentState.COMPLETED
-                        self._state.is_complete = True
-                        self._state.completion_reason = "Maximum iterations reached"
-                        print(f"DEBUG: Setting COMPLETED state due to max iterations reached")
-                else:
+                # We exited the loop because we reached max iterations (since is_complete is False)
+                print(f"DEBUG: error_count = {self._state.error_count}")
+                # If we have errors when reaching max iterations, treat as failure
+                if self._state.error_count > 0:
                     self._state.state = AgentState.FAILED
                     self._state.is_complete = True
-                    if not self._state.completion_reason:
-                        self._state.completion_reason = "Max iterations reached without completion"
+                    self._state.completion_reason = "Max iterations reached without completion"
+                    print(f"DEBUG: Setting FAILED state due to max iterations reached with errors")
+                else:
+                    self._state.state = AgentState.COMPLETED
+                    self._state.is_complete = True
+                    self._state.completion_reason = "Maximum iterations reached"
+                    print(f"DEBUG: Setting COMPLETED state due to max iterations reached")
                     print(f"DEBUG: Setting FAILED state due to not reaching max iterations")
+            # If we were paused when the task ended, make sure to reflect that in the state
+            elif self._paused and self._state.state == AgentState.PAUSED:
+                # Keep as PAUSED state
+                pass
         return self._state
 
     async def _execute_iteration(self) -> None:
@@ -1161,6 +1257,11 @@ class AgentOrchestrator:
 
                 # Get response from model adapter with timeout
                 try:
+                    # Track model call
+                    self._state.total_model_calls += 1
+                    # Track retry (attempt 0 is first try, attempts 1+ are retries)
+                    if attempt > 0:
+                        self._state.total_retries_used += 1
                     model_response = await asyncio.wait_for(
                         self.model_adapter._generate(model_request),
                         timeout=30.0  # LLM response timeout
@@ -1241,10 +1342,14 @@ class AgentOrchestrator:
 
                     self._state.tool_call_history.append({"call": call_data, "result": result_data})
 
-                # If we succeeded, update progress tracking and break out of retry loop
-                self._update_progress(success=True)
+                # Check if all tool calls succeeded
+                all_successful = all(result.success for result in tool_results)
+                # Update progress tracking based on overall success
+                self._update_progress(success=all_successful)
                 self._persist_state()
-                return  # Success, exit the iteration
+                # If we succeeded, exit the retry loop
+                if all_successful:
+                    return  # Success, exit the iteration
 
             except Exception as e:
                 # If we have retries left and the error is retryable, wait and retry
@@ -1540,6 +1645,28 @@ Please provide the next steps to accomplish the task. If the task is complete, i
 """
         return prompt
 
+    def _is_resource_exhausted(self) -> bool:
+        """Check if any resource limits have been exhausted.
+
+        Returns:
+            True if any resource limit has been exceeded, False otherwise
+        """
+        if self._state is None:
+            return False
+
+        # Check model calls limit
+        if self._state.total_model_calls >= self.settings.execution_limits.max_model_calls:
+            return True
+
+        # Check tool calls limit
+        if self._state.total_tool_calls >= self.settings.execution_limits.max_tool_calls:
+            return True
+
+        # Note: We don't check total_retries_used against a specific limit here
+        # as retries are typically bounded by other mechanisms (max_consecutive_failures)
+
+        return False
+
     def _record_failure(self, error: Exception, iteration: int) -> None:
         """Record a failure for pattern detection and analysis.
 
@@ -1791,8 +1918,9 @@ Please provide the next steps to accomplish the task. If the task is complete, i
                 results.append(result)
 
                 # Update counters
+                self._state.total_tool_calls += 1
                 if result.success:
-                    self._state.total_tool_calls += 1
+                    pass  # Success already counted
                 else:
                     self._state.error_count += 1
 
@@ -1805,6 +1933,7 @@ Please provide the next steps to accomplish the task. If the task is complete, i
                     )
                 ))
                 self._state.error_count += 1
+                self._state.total_tool_calls += 1
 
         return results
 

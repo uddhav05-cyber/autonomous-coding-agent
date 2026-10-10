@@ -29,6 +29,7 @@ class ExecutionLimits(BaseModel):
     """Execution limits for the agent."""
     max_iterations: int = Field(default=10, gt=0)
     max_tool_calls: int = Field(default=50, gt=0)
+    max_model_calls: int = Field(default=20, gt=0)
     max_context_tokens: int = Field(default=8000, gt=0)
     timeout_seconds: int = Field(default=300, gt=0)  # 5 minutes
 
