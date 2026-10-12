@@ -1,158 +1,128 @@
 # Autonomous Coding Agent
 
-**Current Phase: Phase 2 - WORKSPACE ABSTRACTION AND FILE OPERATIONS**
+## Project Status
 
-## Project Vision
+The repository now includes implementations beyond the original Phase 2
+workspace milestone, including repository understanding, context engineering,
+model adapter, tool, and orchestrator modules.
 
-Build an AI software-engineering agent capable of taking a software-development task and autonomously working on an existing code repository inside a controlled workspace.
+## What works now
 
-## Phase 2 Objective
+- Workspace abstraction with path confinement and atomic writes
+- Repository understanding components (discovery, metadata, search, relevance)
+- Context engineering components (selection, budgeting, assembly)
+- Model adapter abstractions and provider layer
+- Tool interfaces/registry/policy/execution scaffolding
+- Agent orchestrator loop structure and tests
 
-Create a secure, testable workspace abstraction layer that provides controlled file system operations within a bounded directory, preventing workspace escapes and ensuring safe file operations for the autonomous coding agent.
-
-## Development Setup
+## Quick Start
 
 ### Prerequisites
+
 - Python 3.11+
 - Git
-- Docker (optional, for containerized development)
+- Docker (optional)
 
-### Local Development
-
-1. Clone the repository
-2. Install dependencies:
-   ```bash
-   pip install -e ".[dev]"
-   ```
-3. Use `.env.example` as a reference and export the needed
-   `AUTONOMOUS_AGENT_*` variables in the process environment
-4. Run tests:
-   ```bash
-   pytest tests/
-   ```
-
-### Docker Development
-
-1. Build the Docker image:
-   ```bash
-   docker build -t autonomous-agent .
-   ```
-2. Run tests in container:
-   ```bash
-   docker run --rm autonomous-agent
-   ```
-
-## Configuration
-
-Configuration is managed through Pydantic settings and can be customized via:
-- Environment variables (prefixed with `AUTONOMOUS_AGENT_`)
-- Programmatic overrides
-
-See `src/autonomous_agent/config/settings.py` for available configuration options.
-The current settings loader reads the process environment directly; it does not
-load `.env` files automatically.
-
-## Phase 2 Security Boundary
-
-Workspace operations accept relative paths and absolute paths that resolve
-inside the configured root. Traversal paths, symlink or junction escapes, and
-workspace-root deletion are rejected. Writes use a temporary file in the
-destination directory followed by `os.replace()` to avoid partially written
-files.
-
-This is an application-level boundary, not an OS sandbox. Protection against
-concurrent symlink replacement, shell commands, network access, secrets, and
-file permissions is deferred to later security and tool-policy phases.
-
-## Project Structure
-
-```
-autonomous-coding-agent/
-├── src/                          # Source code
-│   └── autonomous_agent/         # Main package
-│   ├── __init__.py
-│   │   │   ├── config/           # Configuration
-│   │   │   │   ├── __init__.py
-│   │   │   │   └── settings.py   # Pydantic settings
-│   │   │   ├── errors/           # Error handling
-│   │   │   │   ├── __init__.py
-│   │   │   │   └── base.py       # Base error classes
-│   │   │   ├── logging/          # Logging setup
-│   │   │   │   ├── __init__.py
-│   │   │   │   └── setup.py      # Logging configuration
-│   │   │   ├── models/           # Data models
-│   │   │   │   └── __init__.py
-│   │   │   └── workspace/        # Workspace abstraction and file operations
-│   │   │       ├── __init__.py   # Workspace package exports
-│   │   │       ├── backend.py    # Filesystem backend abstraction
-│   │   │       ├── errors.py     # Workspace-specific error hierarchy
-│   │   │       └── manager.py    # Workspace manager interface
-│   │   └── ...
-├── tests/                        # Test suites
-│   ├── unit/                     # Unit tests
-│   │   └── workspace/            # Workspace unit tests
-│   │       ├── test_backend.py   # Backend tests
-│   │       └── test_manager.py   # Manager tests
-│   └── integration/              # Integration tests
-│       └── workspace/            # Workspace integration tests
-│           └── test_workspace.py # Workspace integration tests
-├── .env.example                  # Environment variables template
-├── .gitignore                    # Git ignore rules
-├── Dockerfile                    # Docker development environment
-├── pyproject.toml                # Project configuration and dependencies
-└── README.md                     # This file
-```
-
-## Running Tests
+### Local setup
 
 ```bash
-# Run all tests
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+```
+
+Use `.env.example` as a reference and export required
+`AUTONOMOUS_AGENT_*` variables in your shell environment.
+
+### Development commands
+
+```bash
+# run all tests
 pytest tests/
 
-# Run with coverage
-pytest tests/ --cov=src --cov-report=term-missing
-
-# Run linting
-python -m ruff check src tests
-
-# Type checking is not configured in Phase 2.
-
-# Run specific test suite
+# run unit/integration suites
 pytest tests/unit/
 pytest tests/integration/
 
-# Run workspace tests specifically
-pytest tests/unit/workspace/
-pytest tests/integration/workspace/
+# run coverage
+pytest tests/ --cov=src --cov-report=term-missing
+
+# lint
+python -m ruff check src tests
 ```
 
-## Docker Usage
+### Docker commands
 
 ```bash
-# Build image
 docker build -t autonomous-agent .
-
-# Run tests
 docker run --rm autonomous-agent
-
-# Interactive development
-docker run -it --rm -v $(pwd):/app autonomous-agent bash
 ```
 
-## Completed Phases
+## How to run the agent
 
-- ✅ Phase 1: Project Foundation
-- ✅ Phase 2: Workspace abstraction and file operations
+`pyproject.toml` declares the `autonomous-agent` CLI entrypoint, but the
+`autonomous_agent.__main__` module is not present yet, so the executable entry
+command is not runnable in this revision.
 
-## Next Phases
+## Configuration
 
-After Phase 2 completion, subsequent phases will implement:
+Configuration is managed through Pydantic settings via:
 
-- Phase 3: Repository understanding and code search
-- Phase 4: Context management and selection
-- Phase 5: Model adapter and provider abstraction
-- Phase 6: Tool system with validation and permissions
-- Phase 7: Agent orchestrator and execution loop
+- Environment variables (`AUTONOMOUS_AGENT_*`)
+- Programmatic overrides
+
+See `src/autonomous_agent/config/settings.py` for available options.
+The settings loader reads process environment variables directly and does not
+auto-load `.env` files.
+
+## Security boundary (current)
+
+Workspace operations accept relative paths and absolute paths that resolve
+inside the configured root. Traversal paths, symlink or junction escapes, and
+workspace-root deletion are rejected. Writes use temporary-file + `os.replace()`
+for atomic replacement.
+
+This is an application-level boundary, not an OS sandbox. Protection against
+concurrent symlink replacement, shell commands, unrestricted network access,
+and secret exfiltration is deferred to later security/tool-policy phases.
+
+## Project structure
+
+```
+autonomous-coding-agent/
+├── src/autonomous_agent/
+│   ├── workspace/
+│   ├── repository_understanding/
+│   ├── context_engineering/
+│   ├── model_adapter/
+│   ├── tool/
+│   ├── agentorchestrator/
+│   ├── config/
+│   ├── agent_logging/
+│   └── errors/
+├── tests/
+│   ├── unit/
+│   └── integration/
+├── research/
+├── docs/
+├── PROJECT.md
+├── ARCHITECTURE.md
+├── DECISIONS.md
+└── pyproject.toml
+```
+
+## Implemented today
+
+- ✅ Project foundation and base configuration
+- ✅ Workspace abstraction and file operations
+- ✅ Repository understanding modules
+- ✅ Context engineering modules
+- ✅ Model adapter modules
+- ✅ Tool system scaffolding
+- ✅ Agent orchestrator scaffolding
+
+## Roadmap
+
 - Phase 8: Verification systems (test, lint, type checking)
 - Phase 9: Recovery mechanisms and retry handling
 - Phase 10: Evaluation framework and benchmarking
@@ -161,6 +131,13 @@ After Phase 2 completion, subsequent phases will implement:
 - Phase 13: Optimization based on measurements
 - Phase 14: Developer interface (CLI/API)
 - Phase 15: Final benchmark and validation
+
+## Contributing
+
+- Keep changes minimal and scoped to the task.
+- Add/update tests when behavior changes.
+- Run `pytest tests/` and `python -m ruff check src tests` before submitting.
+- Avoid unrelated refactors in feature/fix PRs.
 
 ## License
 
