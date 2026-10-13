@@ -7,6 +7,7 @@ optimal LLM context within token limits.
 """
 from __future__ import annotations
 
+import collections
 import hashlib
 import time
 from dataclasses import dataclass, field
@@ -18,6 +19,134 @@ from .context_selector import SelectionCriteria
 from .context_budgeter import BudgetAllocation, ContextBudgeter
 from .context_assembler import AssemblyResult
 from .duplicate_preventer import DuplicatePolicy
+from autonomous_agent.repository_understanding import (
+    RepositoryMetadata,
+    RepositoryDiscovery,
+    RepositoryMetadataManager,
+    RelevanceEngine,
+    CodeSearchModule,
+    SymbolDependencyAnalyzer
+)
+from autonomous_agent.workspace import Workspace
+from autonomous_agent.workspace.errors import WorkspaceSecurityError
+
+
+@dataclass
+class ReuseDecision:
+    """Reuse decision for a single file in context selection.
+
+    Attributes:
+        workspace_id: Hash of workspace root path (to detect workspace changes).
+        task_context_id: Hash of task description and goal/completion criteria.
+        selection_config_id: Hash of SelectionCriteria fields affecting selection.
+        file_path: Workspace-relative path of the file.
+        selected: Whether the file was selected in the previous context.
+        relevance_score: Relevance score assigned by ContextSelector (if used).
+        size: File size in bytes at the time of decision.
+        mtime: File modification time at the time of decision.
+        content_hash: Optional hash of file content for validation.
+        timestamp: Unix timestamp when the decision was made.
+        selection_iteration: Iteration number that produced this decision (if available).
+    """
+    workspace_id: str
+    task_context_id: str
+    selection_config_id: str
+    file_path: str
+    selected: bool
+    relevance_score: Optional[float] = None
+    size: int = 0
+    mtime: float = 0.0
+    content_hash: Optional[str] = None
+    timestamp: float = field(default_factory=time.time)
+    selection_iteration: Optional[int] = None
+
+    def validate_workspace(self, current_workspace_id: str) -> bool:
+        """Validate that the workspace identity matches."""
+        return self.workspace_id == current_workspace_id
+
+    def validate_task_context(self, current_task_context_id: str) -> bool:
+        """Validate that the task/context identity matches."""
+        return self.task_context_id == current_task_context_id
+
+    def validate_selection_config(self, current_selection_config_id: str) -> bool:
+        """Validate that the selection configuration identity matches."""
+        return self.selection_config_id == current_selection_config_id
+
+    def validate_file_state(
+        self,
+        current_workspace: "Workspace",
+        current_file_path: str | None = None,
+    ) -> bool:
+        """Validate that the file state is unchanged.
+
+        Args:
+            current_workspace: Current workspace instance for boundary checks.
+            current_file_path: Current workspace-relative file path (if different from stored).
+
+        Returns:
+            True if file exists, is within workspace, and size/mtime/content_hash match.
+        """
+        from pathlib import Path
+
+        # Use the stored file path if current not provided
+        file_path = Path(current_file_path) if current_file_path else Path(self.file_path)
+        try:
+            # Check if file exists and is within workspace, get absolute path
+            abs_file_path = Path(current_workspace.resolve_path(str(file_path)))
+        except WorkspaceSecurityError:
+            return False
+        try:
+            # Check if file exists
+            if not abs_file_path.exists():
+                return False
+            # Check size
+            current_size = abs_file_path.stat().st_size
+            if self.size != current_size:
+                return False
+            # Check mtime
+            current_mtime = abs_file_path.stat().st_mtime
+            if self.mtime != current_mtime:
+                return False
+            # Check content hash if we stored one
+            if self.content_hash is not None:
+                # Compute hash of file content
+                hash_sha256 = hashlib.sha256()
+                with open(abs_file_path, "rb") as f:
+                    for chunk in iter(lambda: f.read(4096), b""):
+                        hash_sha256.update(chunk)
+                current_hash = hash_sha256.hexdigest()
+                if self.content_hash != current_hash:
+                    return False
+            return True
+        except (OSError, FileNotFoundError):
+            return False
+
+    def is_valid(
+        self,
+        current_workspace: "Workspace",
+        current_workspace_id: str,
+        current_task_context_id: str,
+        current_selection_config_id: str,
+        current_file_path: str | None = None,
+    ) -> bool:
+        """Validate that the reuse decision is still valid for the current context.
+
+        Args:
+            current_workspace: Current workspace instance for boundary checks.
+            current_workspace_id: Current workspace identity.
+            current_task_context_id: Current task/context identity.
+            current_selection_config_id: Current selection configuration identity.
+            current_file_path: Current workspace-relative file path (if different from stored).
+
+        Returns:
+            True if all identity components match and file state is valid.
+        """
+        return (
+            self.validate_workspace(current_workspace_id)
+            and self.validate_task_context(current_task_context_id)
+            and self.validate_selection_config(current_selection_config_id)
+            and self.validate_file_state(current_workspace, current_file_path)
+        )
 from autonomous_agent.repository_understanding import (
     RepositoryMetadata,
     RepositoryDiscovery,
@@ -70,6 +199,54 @@ class ContextPackage:
             "workspace_compliant": self.workspace_compliant,
             "validation_passed": self.validation_passed
         }
+
+
+def compute_workspace_id(workspace_path: Path) -> str:
+    """Compute a deterministic ID for the workspace based on its root path.
+
+    Args:
+        workspace_path: Path to the workspace root
+
+    Returns:
+        SHA-256 hash of the workspace root path as a hex string
+    """
+    return hashlib.sha256(str(workspace_path.resolve()).encode()).hexdigest()
+
+
+def compute_task_context_id(task_description: str, goal_completion_criteria: str) -> str:
+    """Compute a deterministic ID for the task context based on task description and goal/completion criteria.
+
+    Args:
+        task_description: Description of the current task
+        goal_completion_criteria: Description of goal/completion criteria
+
+    Returns:
+        SHA-256 hash of the combined task description and goal/completion criteria as a hex string
+    """
+    combined = f"{task_description}|{goal_completion_criteria}"
+    return hashlib.sha256(combined.encode()).hexdigest()
+
+
+def compute_selection_config_id(selection_criteria: SelectionCriteria) -> str:
+    """Compute a deterministic ID for the selection configuration based on relevant fields.
+
+    Args:
+        selection_criteria: Selection criteria object
+
+    Returns:
+        SHA-256 hash of the selection criteria fields that affect selection as a hex string
+    """
+    # Extract the fields that affect selection decisions
+    criteria_fields = {
+        "lines_per_snippet": selection_criteria.lines_per_snippet,
+        "max_snippets_per_file": selection_criteria.max_snippets_per_file,
+        "use_symbol_level_selection": selection_criteria.use_symbol_level_selection,
+        "symbol_similarity_weight": selection_criteria.symbol_similarity_weight,
+        "extract_snippets": selection_criteria.extract_snippets,
+    }
+    # Convert to string and hash
+    criteria_string = str(sorted(criteria_fields.items()))
+    return hashlib.sha256(criteria_string.encode()).hexdigest()
 
 
 class ContextManager:
@@ -137,6 +314,10 @@ class ContextManager:
         # Cache for performance optimization
         self._context_cache: Dict[str, ContextPackage] = {}
         self._max_cache_size = 100
+
+        # Cache for reuse decisions (Phase 7.3.5.3.2)
+        self._reuse_decision_cache: collections.OrderedDict[Tuple[str, str, str, str], ReuseDecision] = collections.OrderedDict()
+        self._max_reuse_cache_size = 100  # Match existing context cache size
 
         # State tracking
         self._last_repository_metadata: Optional[RepositoryMetadata] = None
@@ -1240,6 +1421,104 @@ class ContextManager:
             for old_key in keys_to_remove:
                 del self._context_cache[old_key]
 
+    def _generate_reuse_cache_key(
+        self,
+        workspace_id: str,
+        task_context_id: str,
+        selection_config_id: str,
+        file_path: str
+    ) -> Tuple[str, str, str, str]:
+        """Generate a cache key for reuse decision storage.
+
+        Args:
+            workspace_id: Workspace identifier
+            task_context_id: Task context identifier
+            selection_config_id: Selection configuration identifier
+            file_path: Workspace-relative file path
+
+        Returns:
+            Tuple of (workspace_id, task_context_id, selection_config_id, file_path)
+        """
+        return (workspace_id, task_context_id, selection_config_id, file_path)
+
+    def get_reuse_decision(
+        self,
+        workspace_id: str,
+        task_context_id: str,
+        selection_config_id: str,
+        file_path: str,
+        current_workspace: "Workspace"
+    ) -> Optional[ReuseDecision]:
+        """Get a reuse decision from the cache if valid.
+
+        Args:
+            workspace_id: Workspace identifier
+            task_context_id: Task context identifier
+            selection_config_id: Selection configuration identifier
+            file_path: Workspace-relative file path
+            current_workspace: Current workspace instance for validation
+
+        Returns:
+            ReuseDecision if found and valid, None otherwise
+        """
+        cache_key = self._generate_reuse_cache_key(
+            workspace_id, task_context_id, selection_config_id, file_path
+        )
+
+        # Check if key exists in cache
+        if cache_key in self._reuse_decision_cache:
+            reuse_decision = self._reuse_decision_cache[cache_key]
+
+            # Validate the reuse decision
+            if reuse_decision.is_valid(
+                current_workspace=current_workspace,
+                current_workspace_id=workspace_id,
+                current_task_context_id=task_context_id,
+                current_selection_config_id=selection_config_id,
+                current_file_path=file_path
+            ):
+                # Update LRU - move to end (most recently used)
+                self._reuse_decision_cache.move_to_end(cache_key)
+                return reuse_decision
+            else:
+                # Remove invalid entry
+                del self._reuse_decision_cache[cache_key]
+
+        return None
+
+    def store_reuse_decision(
+        self,
+        workspace_id: str,
+        task_context_id: str,
+        selection_config_id: str,
+        file_path: str,
+        reuse_decision: ReuseDecision
+    ) -> None:
+        """Store a reuse decision in the cache.
+
+        Args:
+            workspace_id: Workspace identifier
+            task_context_id: Task context identifier
+            selection_config_id: Selection configuration identifier
+            file_path: Workspace-relative file path
+            reuse_decision: ReuseDecision object to store
+        """
+        cache_key = self._generate_reuse_cache_key(
+            workspace_id, task_context_id, selection_config_id, file_path
+        )
+
+        # Add to cache
+        self._reuse_decision_cache[cache_key] = reuse_decision
+
+        # Enforce cache size limit (LRU eviction)
+        if len(self._reuse_decision_cache) > self._max_reuse_cache_size:
+            # Remove least recently used entry
+            self._reuse_decision_cache.popitem(last=False)
+
+    def clear_reuse_decision_cache(self) -> None:
+        """Clear the reuse decision cache."""
+        self._reuse_decision_cache.clear()
+
     def get_context_metrics(self) -> Optional['MetricsReport']:
         """
         Get context metrics if metrics collection is enabled.
@@ -1255,6 +1534,7 @@ class ContextManager:
     def clear_cache(self) -> None:
         """Clear the internal context cache."""
         self._context_cache.clear()
+        self.clear_reuse_decision_cache()
         if self.metrics:
             self.metrics.reset()
 
