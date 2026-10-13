@@ -1386,3 +1386,75 @@ Context-window optimization and snippet merging is automatically applied when:
 - Changes to Context Budgeting or Context Assembly systems
 - Creation of semantic duplicate detectors or vector search capabilities
 - Machine learning ranking or embeddings-based relevance scoring
+
+### Phase 7.3.5.3.2: In-Memory Cache and Validation
+
+#### Cache Responsibilities and Ownership
+- **Owner**: `ContextManager` class (sole owner and manager)
+- **Responsibility**: Store and retrieve `ReuseDecision` objects for cross-iteration reuse validation
+- **Scope**: Pure in-memory lookup cache (no persistence, no metrics, no external side effects)
+
+#### Cache Design Specifications
+- **Logical key**: Structured tuple `(workspace_id, task_context_id, selection_config_id, file_path)` where:
+  - `workspace_id`: string from `compute_workspace_id(Path)`
+  - `task_context_id`: string from `compute_task_context_id(str, str)`
+  - `selection_config_id`: string from `compute_selection_config_id(SelectionCriteria)`
+  - `file_path`: normalized workspace-relative path string (no leading/trailing slashes, no `.` or `..` components)
+  - *Implementation note*: A SHA-256 digest of the serialized tuple may be used internally for storage efficiency, but the original identity components are preserved and validated against cached decisions
+- **Cache value**: `ReuseDecision` object **only** (contains identity components, decision data `[selected, relevance_score]`, validation metadata `[size, mtime, content_hash, timestamp, selection_iteration]`)
+  - ❌ **Excludes**: raw file contents, assembled context, token allocations, model summaries, tool outputs, or any other data
+- **Hit conditions** (ALL must be true):
+  1. Key matches exactly (all four identity components equal)
+  2. Workspace boundary validation passes (`current_workspace.resolve_path(file_path)` succeeds)
+  3. File state validation passes via existing `validate_file_state()` method:
+     - File exists within workspace boundaries
+     - `size` matches current file size (bytes)
+     - `mtime` matches current modification time
+     - If `content_hash` is not None, it matches current file content hash
+  4. All existing `ReuseDecision` validations pass:
+     - `validate_workspace(current_workspace_id)` returns `True`
+     - `validate_task_context(current_task_context_id)` returns `True`
+     - `validate_selection_config(current_selection_config_id)` returns `True`
+- **Miss behavior** (ANY condition fails → miss):
+  - Missing entry (key not in cache)
+  - Malformed entry (invalid/corrupted data)
+  - Stale entry (any validation fails)
+  - Uncertain entry (validation error or exception)
+  - **Action**: Remove/invalidate the entry if present, then proceed through normal context selection (never reuse uncertain decisions)
+- **LRU semantics**:
+  - **Recency update**: On every successful cache hit (validation passes)
+  - **Capacity enforcement**: When inserting new entry would exceed capacity, evict least recently used entry *before* insertion
+  - **Tie-breaking**: For entries with identical recency (e.g., never accessed), evict in insertion order (FIFO tie-breaker)
+  - **Implementation**: `collections.OrderedDict` with `move_to_end` on hit and `popitem(last=False)` when over capacity
+- **Invalidation APIs**:
+  - `clear_cache()`: ✅ Suitable - clears both existing context cache and new reuse decision cache
+  - `invalidate_repository_cache()`: ✅ Suitable - clears both caches on repository changes
+  - *Verification*: Both methods are called in contexts where reuse decisions become invalid (repository changes, explicit cache clearing)
+- **File state details**:
+  - **Existence**: `Path.exists()` after `workspace.resolve_path()`
+  - **Workspace containment**: `workspace.resolve_path()` throws `WorkspaceSecurityError` if path escapes workspace → treat as miss
+  - **Size**: `Path.stat().st_size` (bytes)
+  - **Modification time**: `Path.stat().st_mtime` (seconds since epoch)
+  - **Optional content hash**: SHA-256 of file content (if `content_hash` stored in decision)
+  - **Miss treatment**: Missing file, workspace-security failure, size mismatch, mtime mismatch, or hash mismatch → cache miss (never reuse)
+- **Capacity**: Fixed default of 100 entries
+  - **Rationale**: Matches existing `_context_cache` size limit (`_max_cache_size = 100` in line 258); provides ample reuse opportunity while preventing unbounded memory growth; consistent with existing project conventions; not made configurable to avoid complexity
+- **Tests to include**:
+  - Exact-hit behavior (valid identity + file state → hit)
+  - Each identity mismatch (workspace/task/config/file path) → miss
+  - File changes (size/mtime/content_hash) → miss
+  - File deletion → miss
+  - Workspace boundary violation → miss
+  - Invalid ReuseDecision fields (NaN, infinity, out-of-range scores, negative values, malformed hash) → miss
+  - LRU recency updates on hits
+  - Deterministic eviction when at capacity
+  - Capacity bounds respected (no exceeding max size)
+  - Workspace isolation (no hits across different workspaces)
+  - Regression tests (all existing functionality preserved)
+  - Interaction with `clear_cache()` and `invalidate_repository_cache()`
+
+#### Scope Preservation
+- ✅ **In-memory cache and validation layer only**: No persistence, no metrics, no pipeline integration
+- ✅ **No redesign of `ReuseDecision`**: Uses existing model unchanged
+- ✅ **No unrelated cache systems affected**: Isolated to context reuse decisions only
+- ✅ **No architectural blockers identified**: Clean extension of existing validation architecture

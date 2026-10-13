@@ -7,7 +7,14 @@ intelligently manage LLM context within token limits while providing the most
 relevant information for coding tasks.
 """
 
-from .context_manager import ContextManager, ContextPackage
+from .context_manager import (
+    ContextManager,
+    ContextPackage,
+    ReuseDecision,
+    compute_workspace_id,
+    compute_task_context_id,
+    compute_selection_config_id
+)
 from .context_selector import ContextSelector, SelectionCriteria
 from .context_budgeter import ContextBudgeter, BudgetAllocation
 from .context_assembler import ContextAssembler, AssemblyResult
@@ -22,6 +29,10 @@ from .system import (
 __all__ = [
     "ContextManager",
     "ContextPackage",
+    "ReuseDecision",
+    "compute_workspace_id",
+    "compute_task_context_id",
+    "compute_selection_config_id",
     "ContextSelector",
     "SelectionCriteria",
     "ContextBudgeter",

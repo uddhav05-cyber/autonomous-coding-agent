@@ -11,7 +11,11 @@ from autonomous_agent.context_engineering import (
     ContextPackage,
     SelectionCriteria,
     BudgetAllocation,
-    DuplicatePolicy
+    ReuseDecision,
+    DuplicatePolicy,
+    compute_workspace_id,
+    compute_task_context_id,
+    compute_selection_config_id
 )
 from autonomous_agent.workspace import Workspace
 
@@ -23,6 +27,15 @@ class MockWorkspace:
 
     def resolve(self, path):
         return Path(path).resolve()
+
+    def resolve_path(self, path):
+        """Resolve a path relative to the workspace root."""
+        from pathlib import Path
+        path_obj = Path(path)
+        if path_obj.is_absolute():
+            return str(path_obj)
+        else:
+            return str(Path(self.workspace_root) / path)
 
 
 class MockRepositoryDiscovery:
@@ -204,6 +217,93 @@ def test_context_manager_invalidate_repository_cache():
         assert isinstance(package, ContextPackage)
 
 
+def test_reuse_decision_content_hash_validation():
+    """Test that content hash validation causes a cache miss when file content changes."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        test_file = temp_path / "test.py"
+        original_content = "# original content\nprint(\"hello\")"
+        test_file.write_text(original_content)
+
+        workspace = MockWorkspace(temp_dir)
+        manager = ContextManager(workspace=workspace)
+
+        # Get initial file state
+        stat = test_file.stat()
+
+        # Compute content hash for the original file
+        import hashlib
+        hash_sha256 = hashlib.sha256()
+        with open(test_file, "rb") as f:
+            for chunk in iter(lambda: f.read(4096), b""):
+                hash_sha256.update(chunk)
+        original_content_hash = hash_sha256.hexdigest()
+
+        # Create a reuse decision with content hash validation enabled
+        reuse_decision = ReuseDecision(
+            workspace_id=compute_workspace_id(Path(temp_dir)),
+            task_context_id=compute_task_context_id("test task", "complete"),
+            selection_config_id=compute_selection_config_id(SelectionCriteria()),
+            file_path="test.py",
+            selected=True,
+            size=stat.st_size,
+            mtime=stat.st_mtime,
+            content_hash=original_content_hash  # Enable content hash validation
+        )
+
+        # Store the decision
+        manager.store_reuse_decision(
+            workspace_id=compute_workspace_id(Path(temp_dir)),
+            task_context_id=compute_task_context_id("test task", "complete"),
+            selection_config_id=compute_selection_config_id(SelectionCriteria()),
+            file_path="test.py",
+            reuse_decision=reuse_decision
+        )
+
+        # Verify it can be retrieved (valid state)
+        retrieved = manager.get_reuse_decision(
+            workspace_id=compute_workspace_id(Path(temp_dir)),
+            task_context_id=compute_task_context_id("test task", "complete"),
+            selection_config_id=compute_selection_config_id(SelectionCriteria()),
+            file_path="test.py",
+            current_workspace=workspace
+        )
+        assert retrieved is not None
+        assert retrieved.content_hash == original_content_hash
+
+        # Change the file content while keeping approximately the same size
+        # This ensures we test content hash rather than just size
+        new_content = "# updated content\nprint(\"world!\")"
+        test_file.write_text(new_content)
+
+        # Verify the content hash has changed
+        hash_sha256_new = hashlib.sha256()
+        with open(test_file, "rb") as f:
+            for chunk in iter(lambda: f.read(4096), b""):
+                hash_sha256_new.update(chunk)
+        new_content_hash = hash_sha256_new.hexdigest()
+        assert original_content_hash != new_content_hash, "Content hash should have changed"
+
+        # Try to retrieve the decision - should return None due to content hash mismatch
+        retrieved = manager.get_reuse_decision(
+            workspace_id=compute_workspace_id(Path(temp_dir)),
+            task_context_id=compute_task_context_id("test task", "complete"),
+            selection_config_id=compute_selection_config_id(SelectionCriteria()),
+            file_path="test.py",
+            current_workspace=workspace
+        )
+        assert retrieved is None, "Should return None due to content hash mismatch"
+
+        # Verify the entry was removed from cache
+        cache_key = manager._generate_reuse_cache_key(
+            workspace_id=compute_workspace_id(Path(temp_dir)),
+            task_context_id=compute_task_context_id("test task", "complete"),
+            selection_config_id=compute_selection_config_id(SelectionCriteria()),
+            file_path="test.py"
+        )
+        assert cache_key not in manager._reuse_decision_cache
+
+
 if __name__ == "__main__":
     test_context_manager_initialization()
     test_context_manager_with_mock_components()
@@ -213,4 +313,5 @@ if __name__ == "__main__":
     test_context_manager_detect_file_language()
     test_context_manager_clear_cache()
     test_context_manager_invalidate_repository_cache()
+    test_reuse_decision_content_hash_validation()
     print("All context manager tests passed!")
