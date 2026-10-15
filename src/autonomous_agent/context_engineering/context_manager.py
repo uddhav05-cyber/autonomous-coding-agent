@@ -495,14 +495,30 @@ class ContextManager:
                 )[:max_files]
 
                 for file_path, relevance_score in sorted_files:
+                    # Check reuse-decision cache first
+                    workspace_id = compute_workspace_id(self.workspace.workspace_root)
+                    task_context_id = compute_task_context_id(task_description, "")  # Simplified for cache check
+                    selection_config_id = compute_selection_config_id(selection_criteria)
+                    cached_relevance_score, was_selected = self._get_reuse_decision_info(
+                        workspace_id=workspace_id,
+                        task_context_id=task_context_id,
+                        selection_config_id=selection_config_id,
+                        file_path=str(file_path.relative_to(self.workspace.workspace_root) if file_path.is_relative_to(self.workspace.workspace_root) else str(file_path)),
+                        current_workspace=self.workspace
+                    )
+
+                    # Use cached relevance score if available, otherwise use the scored relevance
+                    effective_relevance_score = cached_relevance_score if cached_relevance_score is not None else relevance_score
+
                     # Only include files above minimum relevance threshold
-                    if (relevance_score.composite >=
-                        selection_criteria.min_relevance_score):
+                    # Also consider files that were previously selected (as they may still be relevant)
+                    if (effective_relevance_score.composite >=
+                        selection_criteria.min_relevance_score) or was_selected:
 
                         # Check if file is within workspace boundaries
                         if self._is_within_workspace(file_path):
                             file_context = self._get_file_context(
-                                file_path, relevance_score, selection_criteria
+                                file_path, effective_relevance_score, selection_criteria
                             )
                             if file_context:
                                 selected_context["files"].append(file_context)
@@ -661,8 +677,28 @@ class ContextManager:
 
                 file_path = dir_path_obj / file_name
 
+                # Check reuse-decision cache first
+                workspace_id = compute_workspace_id(self.workspace.workspace_root)
+                task_context_id = compute_task_context_id("", "")  # Simplified for cache check
+                selection_config_id = compute_selection_config_id(SelectionCriteria())  # Default criteria
+                file_rel_path = str(file_path.relative_to(self.workspace.workspace_root) if file_path.is_relative_to(self.workspace.workspace_root) else str(file_path))
+                cached_relevance_score, was_selected = self._get_reuse_decision_info(
+                    workspace_id=workspace_id,
+                    task_context_id=task_context_id,
+                    selection_config_id=selection_config_id,
+                    file_path=file_rel_path,
+                    current_workspace=self.workspace
+                )
+
                 # Skip if not a file or not within workspace
                 if not file_path.is_file() or not self._is_within_workspace(file_path):
+                    continue
+
+                # Prioritize files that were previously selected in similar contexts
+                # In basic discovery mode, we don't have relevance scores, so we rely on selection history
+                if not was_selected and file_count >= max_files // 2:
+                    # If we've already processed half our quota and this file wasn't previously selected,
+                    # only process it if we have slots available
                     continue
 
                 try:
@@ -1485,6 +1521,42 @@ class ContextManager:
                 del self._reuse_decision_cache[cache_key]
 
         return None
+
+    def _get_reuse_decision_info(
+        self,
+        workspace_id: str,
+        task_context_id: str,
+        selection_config_id: str,
+        file_path: str,
+        current_workspace: "Workspace"
+    ) -> Tuple[Optional[float], bool]:
+        """Get relevance score and selection status from a valid reuse decision.
+
+        Args:
+            workspace_id: Workspace identifier
+            task_context_id: Task context identifier
+            selection_config_id: Selection configuration identifier
+            file_path: Workspace-relative file path
+            current_workspace: Current workspace instance for validation
+
+        Returns:
+            Tuple of (relevance_score, was_selected) where:
+            - relevance_score is the relevance score from the reuse decision (if available and valid)
+            - was_selected is whether the file was selected in the previous context (if decision is valid)
+            - Returns (None, False) if no valid reuse decision exists
+        """
+        reuse_decision = self.get_reuse_decision(
+            workspace_id=workspace_id,
+            task_context_id=task_context_id,
+            selection_config_id=selection_config_id,
+            file_path=file_path,
+            current_workspace=current_workspace
+        )
+
+        if reuse_decision is not None:
+            return (reuse_decision.relevance_score, reuse_decision.selected)
+
+        return (None, False)
 
     def store_reuse_decision(
         self,
